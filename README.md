@@ -1,2 +1,2 @@
 # tryhackme-writeups
-The Writeup Files - m investigation reports
+The Writeup Files - my investigation reports
