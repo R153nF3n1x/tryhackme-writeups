@@ -7,7 +7,7 @@ Daily writeups from TryHackMe SOC Level 1 path and challanges
 https://tryhackme.com/p/RisenFenix
 
 #Categories
-- SOCX Level 1 Path rooms
+- SOC Level 1 Path rooms
 - Network Analysis
 - Phishing and Eail Analysis
 - SIEM and Splunk
