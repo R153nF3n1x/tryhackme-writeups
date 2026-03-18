@@ -1,0 +1,44 @@
+# Room Name - TryHackMe: Missing Person
+Date: 16 March 2026
+Difficulty: Easy
+Category: OSINT
+
+# Scenario
+Use your OSINT skills to help the police track down a missing person. The challenge provided task files containing images, and required correlating real-world data across multiple open-source intelligence sources to piece together the missing person's location and contact information.
+
+# Tools Used
+- Browser (web search & research)
+- AI Assistant (image analysis / time estimation)
+- Instagram
+- Facebook
+- Photos / Image metadata analysis
+
+# What I Did
+- Downloaded the task files, a ZIP archive containing two .jpg images: one of food and one of a MotoGP event.
+- Examined the MotoGP image and identified the circuit name visible in the photo. Searched online to find its commercial name: Pertamina Mandalika International Street Circuit, Lombok, Indonesia.
+- Searched for the MotoGP event schedule at that circuit and identified the event dates: 03-05 October 2025.
+- Examined the food image and identified the restaurant name visible on the table/decor: Cantina Mexicana.
+- Used AI to estimate the time of day the photo was taken based on lighting and visual cues.
+- Searched for bars near Kuta, Lombok (the area closest to Mandalika Circuit) and cross-referenced addresses against the expected answer format to identify the correct bar: Jl. Raya Kuta, Kuta, Kec. Pujut, Kabupaten Lombok Tengah, Nusa Tenggara Barat
+- Searched for after-party events held at the bar around the MotoGP event dates. Found an Instagram video from the after-party which revealed the DJ's name: Bong Leleh.
+- Searched for famous caves near Lombok and matched results against the expected answer pattern: Gua Sumur
+- Looked up DJ Bong Leleh's social media accounts and found a Facebook page for Gua Sumur that tagged the DJ's account, which contained the phone number: 85333137345
+
+# What I Found
+- Circuit: Pertamina Mandalika International Street Circuit
+- Event Dates: 03-05 October 2025
+- Restaurant: Cantina Mexicana
+- Bar Address: Jl. Raya Kuta, Kuta, Kec. Pujut, Kabupaten Lombok Tengah, Nusa Tenggara Barat
+- DJ Name: Bong Leleh
+- Cave: Gua Sumur
+- Phone Number: 85333137345
+
+# Key Learning
+Publicly shared images contain far more information than intended, restaurant names, venue signage, and event branding are all identifiable. Cross-platform correlation is powerful: a MotoGP photo, a food image, and a social media video from the same trip can be chained together to reconstruct a person's full itinerary. AI tools can assist in extracting non-obvious intelligence from images even without EXIF metadata present.
+
+# What I Would Flag in a Real SOC
+- Geolocation leakage via social media: posting event photos with visible venue signage or restaurant names inadvertently broadcasts location and schedule to threat actors
+- The same OSINT chain used here (image > venue > social media > contact details) is exactly what a social engineer or adversary would use, staff awareness training is critical
+- Phone number exposure through third-party tagged pages is difficult to audit or control, indirect exposure is often overlooked
+- AI can infer time-of-day and context from image content even without EXIF data, scrubbing metadata alone is no longer sufficient
+- Public Instagram videos from events can be used to name, identify, and potentially locate individuals in a real-world scenario
