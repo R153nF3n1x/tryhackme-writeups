@@ -1,0 +1,54 @@
+#Room Name - TryHackMe: Sakura Room
+#Date: 19 March 2026
+#Difficulty: Easy
+#Category: OSINT
+
+#Scenario
+Use a variety of OSINT techniques to track down a threat actor known as Sakura. The challenge required correlating information across multiple open-source platforms including source code, social media, cryptocurrency wallets, and geolocation intelligence to build a complete profile of the individual.
+
+#Tools Used
+Browser (web search and source code inspection)
+GitHub (repository and PGP key analysis)
+Twitter/X (social media investigation)
+Etherscan (cryptocurrency wallet and transaction analysis)
+Google Lens (reverse image search)
+AI Assistant (image analysis and location identification)
+Online PGP Decryption Tool
+
+#What I Did
+Inspected the source code of the provided page and identified an image filepath containing the username in the directory path: /home/SakuraSnowAngelAiko/Desktop/pwnedletter.png, revealing the username SakuraSnowAngelAiko.
+Searched the username across social platforms and found a GitHub account. Located a PGP key in the repository and used an online PGP decryption tool to extract the associated email address: SakuraSnowAngel83@protonmail.com.
+Located a Twitter/X account linked to the GitHub profile. Found a self-introduction post where the subject identified themselves as Aiko Abe with handle @AikoAbe3.
+Browsed the GitHub repositories and found a repository related to Ethereum, confirming the subject's cryptocurrency of interest.
+Examined the Ethereum repository and found a recent update to a mining script containing a wallet address: 0xa102397dbeeBeFD8cD2F73A89122fCdB53abB6ef.
+Used Etherscan to look up the wallet address, identified the mining pool as Ethermine, and traced transactions to identify a second cryptocurrency: Tether.
+Located the Twitter/X account @SakuraLoverAiko confirming the subject's social media presence.
+Pasted an image from the room into an AI assistant to identify the airport as DCA (Ronald Reagan Washington National Airport).
+Used Google Lens on a second image to identify the layover airport as HND (Haneda Airport, Tokyo).
+Used AI to analyse a lake image and identify it as Lake Inawashiro.
+Connected the locations: DCA departure, HND layover, Lake Inawashiro proximity and nearest city, to identify the final destination as Hirosaki.
+
+#What I Found
+Username: SakuraSnowAngelAiko
+Email: SakuraSnowAngel83@protonmail.com
+Full Name: Aiko Abe
+Cryptocurrency: Ethereum
+Wallet Address: 0xa102397dbeeBeFD8cD2F73A89122fCdB53abB6ef
+Mining Pool: Ethermine
+Second Cryptocurrency: Tether
+Twitter/X Account: @SakuraLoverAiko
+Departure Airport: DCA
+Layover Airport: HND
+Lake: Lake Inawashiro
+Final Location: Hirosaki
+
+#Key Learning
+A single exposed file path in source code can reveal a username that unlocks an entire digital identity across platforms. PGP keys stored publicly in repositories are not anonymous — they carry the owner's email address and can be decrypted with freely available tools. Cryptocurrency wallets are permanently public and traceable — every transaction, mining pool, and wallet interaction is visible to anyone with the address. AI tools can extract meaningful geolocation intelligence from images even without EXIF metadata, identifying airports, landmarks, and bodies of water from visual content alone. Chaining small pieces of individually harmless data across platforms builds a complete and detailed profile of a person's identity, finances, and physical location.
+
+#What I Would Flag in a Real SOC
+Source code and file paths left in publicly accessible pages can expose system usernames and directory structures — code review before publication is essential and often overlooked.
+PGP keys published in public repositories expose the owner's email address — this is a common OSINT entry point that developers frequently underestimate.
+Cryptocurrency wallet addresses should never be considered anonymous — all transactions are publicly auditable on-chain. Using a wallet address in a public repository script is equivalent to publishing a financial statement.
+The full geolocation chain used here — departure airport, layover, lake, nearest city — was reconstructed entirely from images shared on social media. Employees handling sensitive work should be briefed that AI can now geolocate images without EXIF data, metadata scrubbing alone is no longer sufficient protection.
+Social media handles linked across platforms create a cross-platform identity graph that is trivial to map. Threat actors and investigators alike use the same technique — one username leads to email, email leads to crypto, crypto leads to location.
+In a real investigation this chain would constitute a full threat actor profile built entirely from publicly available information with no privileged access required.
