@@ -1,0 +1,41 @@
+# Room Name - TryHackMe: Dev Diaries
+Date: 16 March 2026
+Difficulty: Easy
+Category: OSINT / Git Forensics
+
+# Scenario
+Hunt through online development traces to uncover what was left behind. The challenge involved tracing a developer's digital footprint across a website, subdomain enumeration, and Git commit history analysis.
+
+# Tools Used
+- Browser
+- Google
+- GitHub
+- Git (clone, log)
+
+# What I Did
+- Navigated to the target website: marvenly.com and inspected its contents.
+- Searched for subdomains associated with the target domain and discovered: uat-testing.marvenly.com
+- Checked the website footer and found a username: notvibecoder23
+- Verified the username by searching on Google, which confirmed a matching GitHub profile.
+- Used git clone to download the repository locally.
+- Ran git log to view commit history and found the developer's email in the author information: freelancedevbycoder23@gmail.com
+- Continued reviewing git log and found that the project was marked as abandoned due to a payment dispute.
+- Checked the commit history on GitHub and viewed the third commit. Found a hidden flag in the code changes.
+
+# What I Found
+- Target Website: marvenly.com
+- Subdomain: uat-testing.marvenly.com
+- GitHub Username: notvibecoder23
+- Developer Email: freelancedevbycoder23@gmail.com
+- Reason for Abandonment: Payment dispute
+- Flag: THM{g1t_h1st0ry_n3v3r_f0rg3ts}
+
+# Key Learning
+Git commit history is a permanent record and never truly "hidden" once pushed to a public repository. Developer usernames found in website footers or page sources can be pivoted to GitHub profiles, which may expose emails, repositories, and sensitive data left in commit diffs. Subdomains such as UAT or staging environments are often overlooked during cleanup and can expose internal tooling or test credentials.
+
+# What I Would Flag in a Real SOC
+- Sensitive data (emails, credentials, flags, API keys) committed to public repositories persist in git history even after deletion from the latest codebase, git log and diff tools make them fully recoverable
+- Developer usernames embedded in website source or footers create a direct pivot path to their broader online presence and repositories
+- Staging and UAT subdomains should be treated with the same security posture as production, they are frequently left exposed with weaker controls
+- Abandoned repositories from former contractors or freelancers should be archived or made private immediately upon end of engagement
+- organisations should run periodic secret scanning tools (e.g. truffleHog, GitLeaks) against all public repositories to detect accidental exposure
