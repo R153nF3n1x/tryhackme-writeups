@@ -1,7 +1,7 @@
 # tryhackme-writeups
 The Writeup Files - my investigation reports
 
-Daily writeups from TryHackMe SOC Level 1 path and challanges
+Writeups from TryHackMe SOC Level 1 path and challanges
 
 #profile
 https://tryhackme.com/p/RisenFenix
