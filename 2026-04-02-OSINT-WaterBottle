@@ -1,0 +1,32 @@
+# Room Name - TryHackMe: Water Bottle
+Date: 16 March 2026
+Difficulty: Easy
+Category: OSINT / Geolocation
+
+# Scenario
+Track down a vanished water station using nothing but fragments of memory and OSINT. The challenge required locating a water refilling station that no longer exists using historical map data and open-source research.
+
+# Tools Used
+- Browser
+- Google Maps (Street View / Historical Imagery)
+
+# What I Did
+- Searched for water refilling stations located along Boni Avenue.
+- Opened Google Maps Street View for Boni Avenue and used the historical imagery feature to go back to 2014.
+- Identified a water refilling station visible in the 2014 street view: Aquabest
+- Searched for Aquabest's contact information and found their phone number on a contact page: +639228721228
+- Constructed the flag following the given format (Water Station name in lowercase + _ + Contact Number): THM{aquabest_639228721228}
+
+# What I Found
+- Location: Boni Avenue
+- Water Station Name: Aquabest
+- Contact Number: +639228721228
+- Flag: THM{aquabest_639228721228}
+
+# Key Learning
+Google Maps Street View retains historical imagery going back several years, making it a powerful tool for reconstructing past physical environments. Businesses that have since closed or moved can still be identified through archived street-level photography. Combining geolocation with historical imagery is a core OSINT technique for tracking entities that no longer have an active online presence.
+
+# What I Would Flag in a Real SOC
+- Historical map data is publicly accessible and can be used by adversaries to reconstruct past physical security layouts, entry points, or facility configurations that have since changed
+- Business contact information persisted on old websites or cached pages remains searchable long after a business closes, contributing to a persistent digital footprint
+- OSINT investigators and threat actors alike can use Street View timelines to verify or disprove alibis, track physical movements, or identify past associates of a target location
