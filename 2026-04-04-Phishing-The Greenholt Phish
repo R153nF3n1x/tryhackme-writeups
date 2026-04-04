@@ -1,0 +1,55 @@
+# Room Name - TryHackMe: The Greenholt Phish
+Date: 16 March 2026
+Difficulty: Easy
+Category: Phishing Analysis / Email Forensics
+
+# Scenario
+Use the knowledge attained to analyze a malicious email. The challenge involved examining a suspicious .eml file to extract key indicators of compromise including sender details, email headers, attachment metadata, and threat intelligence from VirusTotal.
+
+# Tools Used
+- TryHackMe Attack Box
+- Email Client (.eml viewer)
+- Email Source / Header Viewer
+- MX Toolbox (SPF / DMARC checker)
+- VirusTotal
+- Terminal (sha256sum)
+
+# What I Did
+- Accessed the TryHackMe machine and opened the challenge.eml file.
+- Located the transfer reference number mentioned in the email body: 09674321
+- Identified the sender's name from the email signature: Mr. James Jackson
+- Found the sender's email address from the From field: info@mutawamarine.com
+- Found the Reply-To address, which differed from the sender field indicating reply hijacking: info.mutawamarine@mail.com
+- Viewed the raw source of the email and extracted the originating IP address from the email headers: 192.119.71.157
+- Looked up the domain associated with the originating IP and identified the owner: Hostwinds LLC
+- Used MX Toolbox SPF checker to retrieve the SPF record for the domain: v=spf1 include:spf.protection.outlook.com -all
+- Used MX Toolbox to retrieve the DMARC record: v=DMARC1; p=quarantine; fo=1
+- Found the name of the malicious attachment in the email: SWT_#09674321____PDF__.CAB
+- Ran sha256sum on the attachment file in the terminal to obtain its hash: 2e91c533615a9bb8929ac4bb76707b2444597ce063d84a4b33525e25074fff3f
+- Uploaded the hash to VirusTotal and checked the Details tab to find the file size: 400.26 KB
+- Identified the true file type from VirusTotal Details tab: RAR
+
+# What I Found
+- Transfer Reference Number: 09674321
+- Sender Name: Mr. James Jackson
+- Sender Email: info@mutawamarine.com
+- Reply-To Email: info.mutawamarine@mail.com
+- Originating IP: 192.119.71.157
+- IP Owner: Hostwinds LLC
+- SPF Record: v=spf1 include:spf.protection.outlook.com -all
+- DMARC Record: v=DMARC1; p=quarantine; fo=1
+- Attachment Name: SWT_#09674321____PDF__.CAB
+- SHA256 Hash: 2e91c533615a9bb8929ac4bb76707b2444597ce063d84a4b33525e25074fff3f
+- Attachment Size: 400.26 KB
+- File Type: RAR
+
+# Key Learning
+Phishing emails often disguise malicious attachments with misleading extensions (the file appeared as a .CAB but was identified as RAR by VirusTotal). A mismatch between the From and Reply-To fields is a strong indicator of reply hijacking, where the attacker intercepts responses without the victim noticing. Always examine raw email headers to uncover the true originating IP, as display names and sender fields can be trivially spoofed. SPF and DMARC records provide insight into whether the sending domain has proper email authentication controls in place.
+
+# What I Would Flag in a Real SOC
+- Reply-To mismatch: the From and Reply-To addresses belonging to different domains is a high-confidence phishing indicator and should trigger an alert
+- Attachment with a double or misleading extension (.PDF__.CAB) is a common social engineering technique to trick users into thinking the file is a PDF
+- The true file type (RAR) differing from the displayed extension should be flagged by any email gateway with attachment inspection enabled
+- Originating IP resolving to a generic hosting provider (Hostwinds LLC) rather than the claimed organisation's mail infrastructure is suspicious and warrants investigation
+- SHA256 hash should be immediately cross-referenced against threat intelligence feeds upon detection, a known-malicious hash is grounds for incident escalation
+- DMARC policy set to quarantine rather than reject means spoofed emails from this domain may still reach inboxes, the domain owner should be advised to strengthen their policy
