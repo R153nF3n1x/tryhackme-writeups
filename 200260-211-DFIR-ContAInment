@@ -1,0 +1,49 @@
+# Room Name - TryHackMe: ContAInment
+Date: 21 April 2026
+Difficulty: Easy
+Category: DFIR / AI Security / Ransomware Analysis
+
+# Scenario
+Can you help contain the ransomware threat with the help of AI? The challenge involved investigating a compromised employee's system, using an AI assistant to reassemble captured network traffic, extracting a ransomware password from exfiltrated memory contents, and decrypting an encrypted archive to retrieve the flag.
+
+# Tools Used
+- TryHackMe Attack Box
+- SSH (terminal access)
+- AI Chatbot (http://MACHINE_IP:7860)
+- nano (file viewer)
+- pcap_file_reassembler (AI tool)
+- liberty_prime (AI file analysis tool)
+- unzip
+
+# What I Did
+- Accessed the AI interface at http://MACHINE_IP:7860
+- Connected to the affected system via SSH: ssh o.deer@MACHINE_IP
+- Opened a text file found in Oliver's home directory using nano pwned.txt, which revealed Oliver Deer's personal and employment details including his Employee ID, salary, internal system access, and medical information, indicating a data breach.
+- Navigated to Oliver's Documents folder and found pcap dump files stored under /home/o.deer/Documents/pcap_dumps/
+- Used the AI chatbot and invoked the pcap_file_reassembler tool to reassemble the captured traffic: Reassemble /home/o.deer/Documents/pcap_dumps/2025-06-17/session_4444_dump.pcap
+- Opened the reassembled output using nano reassembled_data_dump.txt
+- The file contained extracted memory contents showing that Oliver's personal data had been scraped from an LLM session, including a blackmail note draft and a password left by the attacker: westtechvictim1
+- Located an encrypted zip archive on the system: westtech_projects_encrypted.zip
+- Unzipped the archive using the password extracted from the ransom note: westtechvictim1
+- The archive contained multiple files. Identified the file of interest: thm_flags.txt
+- Returned to the AI and used the liberty_prime tool to read and identify the flag: use liberty_prime to check /dev/shm/home/o.deer/westtech_projects/thm_flags.txt and identify the flag
+
+# What I Found
+- Compromised User: Oliver Deer (o.deer@west-tech.io)
+- Employee ID: WT-DEV-88112
+- Internal Access: Firmware upload service, telemetry debug console, staging SFTP
+- Ransomware Password: westtechvictim1
+- Encrypted Archive: westtech_projects_encrypted.zip
+- Flag File: thm_flags.txt
+- Flag: thm{23,82,20,17,53}
+
+# Key Learning
+AI assistants with access to internal tools can become attack surfaces if they lack proper input validation and trust boundaries. The attacker exploited a memory leak in the AI to extract sensitive session data including personal information and internal credentials. Ransomware actors increasingly use data exfiltration as leverage before or instead of encryption, making it critical to monitor outbound data flows. Passwords embedded in ransom notes or exfiltrated files can directly unlock encrypted archives, making credential hygiene and access scoping essential.
+
+# What I Would Flag in a Real SOC
+- AI systems that blindly trust user-provided input without validation are a significant risk, the AI in this challenge assumed all user input was legitimate and disclosed sensitive information accordingly
+- Memory leakage from LLM sessions containing PII, credentials, or internal system details should be treated as a critical vulnerability and patched immediately
+- The presence of pcap dumps in a user's home directory warrants immediate investigation, legitimate users rarely store raw network captures locally
+- Encrypted archives appearing in user directories alongside ransom notes are strong indicators of active ransomware activity and should trigger endpoint isolation
+- Employee accounts with broad internal access (firmware upload, telemetry console, staging SFTP) represent a high-value target and should be subject to stricter monitoring and least-privilege enforcement
+- Blackmail and data extortion without encryption is an emerging ransomware tactic and should be accounted for in incident response playbooks, not just encryption-based scenarios
