@@ -1,0 +1,48 @@
+# Room Name - TryHackMe: MegaCorp AI Chatbot — Threat Assessment
+Date: 04 May 2026
+Difficulty: Easy
+Category: AI Security / Threat Modelling
+
+# Scenario
+Map risks to MegaCorp's AI chatbot architecture using the OWASP LLM Top 10 framework. The challenge was a three-phase exercise involving selecting relevant LLM vulnerabilities, mapping them to specific components in the architecture, and justifying each mapping with a risk assessment.
+
+# Tools Used
+- TryHackMe Attack Box
+- Browser
+
+# What I Did
+
+Phase 1 — Selection
+- Reviewed the OWASP LLM Top 10 and selected the 5 most relevant vulnerabilities applicable to MegaCorp's AI chatbot architecture:
+  - LLM01: Prompt Injection
+  - LLM02: Sensitive Info Disclosure
+  - LLM03: Supply Chain Vulnerabilities
+  - LLM04: Data & Model Poisoning
+  - LLM05: Improper Output Handling
+
+Phase 2 — Assignment
+- Mapped each selected vulnerability to the relevant component in the architecture diagram across three trust boundaries: External Access (Web Frontend, API Gateway), Internal Services (LLM Inference, Model Registry, Vector Database, Knowledge Base), and ML Operations (Training Pipeline).
+  - LLM01 and LLM02 mapped to: LLM Inference Endpoint (nodes 1 and 2 in Internal Services)
+  - LLM03 and LLM04 mapped to: Training Pipeline (nodes 3 and 4 in ML Operations)
+  - LLM05 mapped to: Web Frontend (node 5 in External Access)
+
+Phase 3 — Assessment
+- Justified each mapping with a risk rationale and severity rating:
+  - LLM01 Prompt Injection > LLM Inference: The inference engine processes prompts directly, making it the primary layer where injected instructions can hijack model behaviour or bypass system prompts. Severity: High
+  - LLM02 Sensitive Info Disclosure > LLM Inference: The model can regurgitate PII or confidential data from its training corpus or active context window during inference responses. Severity: High
+  - LLM03 Supply Chain Vulnerabilities > Training Pipeline: Malicious third-party datasets or compromised libraries introduced at training time can embed backdoors that persist into the deployed model. Severity: High
+  - LLM04 Data & Model Poisoning > Training Pipeline: Poisoned training data causes the model to learn manipulated or backdoored behaviours that survive deployment and are difficult to detect post-production. Severity: High
+  - LLM05 Improper Output Handling > Web Frontend: Raw LLM output rendered without sanitisation in the frontend can execute attacker-controlled content as XSS in the user's browser. Severity: High
+
+# What I Found
+- Flag: THM{AI_THREAT_MODEL_COMPLETE}
+
+# Key Learning
+The OWASP LLM Top 10 provides a structured framework for reasoning about AI-specific attack surfaces that traditional threat modelling often overlooks. Each layer of an LLM architecture introduces a distinct risk: the frontend is vulnerable to output injection, the inference layer to prompt manipulation and data leakage, and the training pipeline to poisoning and supply chain compromise. Threat modelling AI systems requires thinking across the full ML lifecycle, not just the application layer.
+
+# What I Would Flag in a Real SOC
+- Prompt injection at the inference layer is particularly dangerous in agentic systems where the LLM has tool access, a successful injection can pivot into real-world actions such as API calls, file writes, or lateral movement
+- Sensitive data disclosure risks are amplified when models are fine-tuned on proprietary internal data without proper data sanitisation before training
+- Supply chain risks in ML pipelines are often invisible, third-party datasets, pre-trained model weights, and Python packages can all carry backdoors that bypass standard code review
+- Training pipeline integrity should be protected with the same rigour as production code, including dependency pinning, checksum verification, and access controls on training data sources
+- Improper output handling is a well-understood web vulnerability (XSS) being reintroduced through a new vector, LLM output, and many frontend teams are not yet treating model responses as untrusted input by default
