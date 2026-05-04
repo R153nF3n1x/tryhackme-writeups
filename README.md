@@ -8,6 +8,7 @@ https://tryhackme.com/p/RisenFenix
 
 #Categories
 - SOC Level 1 Path rooms
+- AI Security
 - Network Analysis
 - Phishing and Email Analysis
 - SIEM and Splunk
