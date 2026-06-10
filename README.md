@@ -21,6 +21,7 @@ Each writeup follows the same structure:
 | 2026-05-04 | MegaCorp AI Chatbot | AI Security | Easy |
 | 2026-04-20 | DFIR - The Digital Trail | DFIR / Forensics | Easy |
 | 2026-04-04 | The Greenholt Phish | Phishing / Email Forensics | Easy |
+| 2026-04-02 | OSINT - WaterBottle | OSINT | Easy |
 | 2026-03-23 | OSINT - GitForensics | OSINT | Easy |
 | 2026-03-19 | OSINT - Sakura | OSINT | Easy |
 | 2026-03-18 | OSINT - Missing Person | OSINT | Easy |
