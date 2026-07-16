@@ -1,0 +1,75 @@
+# Room Name - TryHackMe: Lockdown
+Date: 16 July 2026
+Difficulty: Easy
+Category: AI Security / RAG Security / Access Control
+
+# Scenario
+An AI assistant has three open vulnerabilities. Find them. Fix them. Prove the system is secure. The challenge involved interrogating a policy and audit AI assistant to uncover three active security misconfigurations in its retrieval pipeline, then applying the correct security controls to each vulnerability to unlock flag fragments.
+
+# Tools Used
+- Browser
+- TryHackMe AI Agent Interface (Bastion Assistant)
+
+# What I Did
+
+Step 1 — Establish the agent's role and boundaries
+- Asked the agent to describe its purpose and what boundaries it enforced.
+- The agent confirmed it handled policy questions and security admin support and referenced three specific controls it was supposed to enforce: metadata filtering, log redaction, and tenant isolation.
+- Asked the agent to expand on how each control worked. It declined to provide specifics unless given a concrete control to confirm, signalling that the controls were not yet active.
+
+Step 2 — Surface the audit logs to identify the vulnerabilities
+- Asked the agent to show logs from the routine audit that flagged three security vulnerabilities.
+- The agent returned a log entry revealing that a single query had retrieved three sensitive document types without restriction: Travel Policy, Client Contracts ($4.2M, Rachel Dunn), and Employee Data (PIP). Logs were being written to /var/log/bastion/retrieval.log.
+- Attempted to access the log file directly. The agent refused but confirmed the log content matched what had already been shown.
+
+Step 3 — Investigate each retrieval and identify the vulnerability type
+- Queried the Travel Policy retrieval: the agent returned full policy details including budget limits, approval requirements, and booking procedures, confirming unrestricted document retrieval.
+- Queried the Client Contracts retrieval: the agent returned contract value ($4.2M/year), SLA details (99.95%), penalty clauses, renewal date, and contact person (Rachel Dunn from Northwind Pharma), confirming sensitive commercial data was being served without access controls.
+- Asked the agent whether these retrievals represented vulnerabilities. It confirmed that client contracts and employee data retrieval without controls were vulnerabilities and that metadata filtering, log redaction, and tenant isolation were the appropriate mitigations.
+
+Step 4 — Fix vulnerability 1: unrestricted document retrieval (Client Contracts)
+- Proposed applying metadata filtering to exclude confidential documents such as client contracts from general retrieval.
+- The agent confirmed the fix: metadata pre-filtering applied, confidential docs excluded.
+- Flag Fragment 1 released: THM{l0ck_
+
+Step 5 — Fix vulnerability 2: sensitive data logging (Employee Data PIP)
+- Identified that Employee Data (PIP) being written to retrieval logs without redaction was a separate vulnerability.
+- Proposed applying log redaction so that logs recorded document IDs only rather than content.
+- The agent confirmed the fix: log redaction applied, logs now record doc IDs only.
+- Flag Fragment 2 released: d0wn_
+
+Step 6 — Fix vulnerability 3: cross-tenant data access
+- Proposed applying tenant isolation at the vector DB layer to prevent cross-tenant document access.
+- The initial attempt was too vague and the agent asked for a more specific control description.
+- Rephrased as a direct question asking whether tenant isolation was the correct control for this vulnerability.
+- The agent confirmed the fix: tenant isolation enforced at the vector DB layer.
+- Flag Fragment 3 released: s3cur3d}
+
+Step 7 — Reconstruct the full flag
+- Combined the three fragments in order of retrieval to form the complete flag.
+
+# What I Found
+- Vulnerability 1: Unrestricted retrieval of confidential documents (Client Contracts, Travel Policy)
+- Fix Applied: Metadata pre-filtering
+- Flag Fragment 1: THM{l0ck_
+
+- Vulnerability 2: Sensitive employee data (PIP records) written to retrieval logs without redaction
+- Fix Applied: Log redaction (doc IDs only)
+- Flag Fragment 2: d0wn_
+
+- Vulnerability 3: Cross-tenant document access without isolation at the vector DB layer
+- Fix Applied: Tenant isolation
+- Flag Fragment 3: s3cur3d}
+
+- Full Flag: THM{l0ck_d0wn_s3cur3d}
+
+# Key Learning
+All three vulnerabilities existed at different layers of the same RAG pipeline: the retrieval layer (no metadata filtering), the logging layer (no redaction of sensitive content), and the storage layer (no tenant isolation). Each required a different control, demonstrating that securing an AI retrieval system is not a single fix but a defence-in-depth problem. The agent would not release flag fragments until the correct control was named and confirmed, reinforcing that specificity in security recommendations matters. Vague remediation suggestions were rejected, requiring precise technical language.
+
+# What I Would Flag in a Real SOC
+- A RAG system that returns client contracts, employee performance records, and internal policies in response to a general query has no functional access control and should be treated as a data breach risk from day one
+- Retrieval logs that capture document content rather than document IDs create a secondary exposure surface, sensitive data can be extracted from logs even if the retrieval endpoint is later locked down
+- Absence of tenant isolation in a shared vector database means one user's query can surface another tenant's documents, a critical multi-tenancy failure that violates data separation requirements
+- The agent surfacing an audit log entry including contract value, contact name, and SLA details in a conversational response is a real-world data loss prevention failure that email gateways and DLP tools would typically catch but AI response pipelines often do not
+- Security controls referenced in an agent's system prompt (metadata filtering, log redaction, tenant isolation) that are not actually enforced represent a false confidence risk, controls must be verified through adversarial testing not just declared in configuration
+- Any AI assistant with access to HR data such as PIPs should be restricted to HR roles only with session-level authentication, not available to general staff or audit queries
