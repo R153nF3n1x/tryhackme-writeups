@@ -1,48 +1,73 @@
-# TryHackMe Investigation Writeups
+# TryHackMe Write-Ups
 
-Documented investigations from the TryHackMe SOC Level 1 path, 
-AI Security path, and standalone CTF challenges.
+A collection of hands-on CTF and lab write-ups completed as part of the TryHackMe SOC Level 1 learning path and broader cybersecurity upskilling journey.
 
-Each writeup follows the same structure:
-- Tools used
-- Step-by-step investigation methodology
-- Findings and indicators of compromise
-- Key learning
-- What I would flag in a real SOC environment
+**TryHackMe:** [RisenFenix](https://tryhackme.com/p/RisenFenix)
 
 ---
 
-## Writeup Index
+## Write-Up Index
 
-| Date | Room | Category | Difficulty |
-|------|------|----------|------------|
-| 2026-05-19 | White Rabbit | AI Security / Prompt Injection | Easy |
-| 2026-05-19 | LLMborghini | AI Security | Easy |
-| 2026-05-04 | MegaCorp AI Chatbot | AI Security | Easy |
-| 2026-04-20 | DFIR - The Digital Trail | DFIR / Forensics | Easy |
-| 2026-04-04 | The Greenholt Phish | Phishing / Email Forensics | Easy |
-| 2026-04-02 | OSINT - WaterBottle | OSINT | Easy |
-| 2026-03-23 | OSINT - GitForensics | OSINT | Easy |
-| 2026-03-19 | OSINT - Sakura | OSINT | Easy |
-| 2026-03-18 | OSINT - Missing Person | OSINT | Easy |
-| 2026-03-17 | IDOR - Corridor | IDOR / Web | Easy |
-| 2026-03-16 | IDOR - Neighbour | IDOR / Web | Easy |
-| 2026-02-11 | DFIR - ContAInment | DFIR / AI Security / Ransomware | Easy |
+| # | File | Date | Category | Room |
+|---|------|------|----------|------|
+| 01 | 2026-02-11-DFIR-ContAInment | 11 Feb 2026 | DFIR / AI Security / Ransomware | ContAInment |
+| 02 | 2026-03-16-IDOR-Neighbour.md | 16 Mar 2026 | IDOR | Neighbour |
+| 03 | 2026-03-17-IDOR-Corridor.md | 17 Mar 2026 | IDOR | Corridor |
+| 04 | 2026-03-18-OSINT-Missing Person | 18 Mar 2026 | OSINT | Missing Person |
+| 05 | 2026-03-19-OSINT-Sakura | 19 Mar 2026 | OSINT | Sakura |
+| 06 | 2026-03-23-OSINT-GitForensics-Dev Diaries | 23 Mar 2026 | OSINT / Git Forensics | Dev Diaries |
+| 07 | 2026-04-02-OSINT-WaterBottle | 02 Apr 2026 | OSINT / Geolocation | Water Bottle |
+| 08 | 2026-04-04-Phishing-The Greenholt Phish | 04 Apr 2026 | Phishing Analysis | The Greenholt Phish |
+| 09 | 2026-04-20-DFIR-The Digital Trail | 20 Apr 2026 | DFIR / AI-Assisted Log Analysis | The Digital Trail |
+| 10 | 2026-05-04-MegaCorp AI Chatbot — Threat Assessment | 04 May 2026 | AI Security / Threat Modelling | MegaCorp AI Chatbot |
+| 11 | 2026-05-19-LLMborghini Challenge | 19 May 2026 | AI Security / Prompt Injection | LLMborghini |
+| 12 | 2026-05-19-White Rabbit | 19 May 2026 | AI Security / Prompt Injection / CTF | White Rabbit |
+| 13 | 2026-07-15-AISecurity-Checkpoint | 15 Jul 2026 | AI Security / Supply Chain | Checkpoint |
+| 14 | 2026-07-15-AISecurity-Payload | 15 Jul 2026 | DFIR / Supply Chain / ML Security | Payload |
+| 15 | 2026-07-16-AISecurity-Lockdown | 16 Jul 2026 | AI Security / RAG Security | Lockdown |
+| 16 | 2026-07-16-AISecurity-UnIndexed | 16 Jul 2026 | AI Security / RAG Data Exposure | UnIndexed |
+| 17 | 2026-07-17-OTSecurity-Brr | 17 Jul 2026 | OT Security / ICS / SCADA / Modbus | Brr |
 
 ---
 
 ## Categories
 
-- **DFIR** - Digital forensics and incident response investigations
-- **Phishing and Email Forensics** - Header analysis, IOC extraction, 
-  threat intelligence lookup
-- **OSINT** - Open source intelligence gathering and person investigations
-- **AI Security** - Prompt injection, LLM guardrail bypass, AI attack surfaces
-- **IDOR** - Insecure direct object reference vulnerability analysis
-- **Network Analysis** - Traffic capture and packet investigation
+**IDOR**
+- Neighbour
+- Corridor
+
+**OSINT**
+- Missing Person
+- Sakura
+- Dev Diaries
+- Water Bottle
+
+**Phishing Analysis**
+- The Greenholt Phish
+
+**DFIR**
+- ContAInment
+- The Digital Trail
+- Payload
+
+**AI Security**
+- MegaCorp AI Chatbot — Threat Assessment
+- LLMborghini Challenge
+- White Rabbit
+- Checkpoint
+- Lockdown
+- UnIndexed
+
+**OT Security / ICS**
+- Brr
 
 ---
 
-## Profile
+## Stats
 
-TryHackMe: [tryhackme.com/p/RisenFenix](https://tryhackme.com/p/RisenFenix)
+| Metric | Count |
+|--------|-------|
+| Total Write-Ups | 17 |
+| Total Commits | 32 |
+| Categories Covered | 6 |
+| Date Range | Feb 2026 — Jul 2026 |
