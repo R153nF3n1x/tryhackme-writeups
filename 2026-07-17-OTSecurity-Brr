@@ -1,0 +1,61 @@
+# Room Name - TryHackMe: Brr
+Date: 17 July 2026
+Difficulty: Easy
+Category: OT Security / ICS / Modbus / SCADA
+
+# Scenario
+You have been called in to assess an OT (Operational Technology) environment. The challenge involved scanning an ICS network, accessing a SCADA system through default credentials, enumerating Modbus registers, and decoding hidden hex values to retrieve a flag.
+
+# Tools Used
+- TryHackMe Attack Box
+- Mozilla Firefox (browser)
+- nmap
+- ScadaBR (SCADA web interface)
+- CyberChef (hex decoder)
+
+# What I Did
+
+Step 1 — Initial reconnaissance
+- Launched the TryHackMe Attack Box and the lab machine.
+- Attempted to access the target IP directly in the browser, which returned an error response.
+- Ran an nmap scan to identify open ports and running services: nmap -sC -sV -p- 10.49.135.173
+- Discovered an open service on port 8080.
+
+Step 2 — Access the SCADA interface
+- Navigated to the ScadaBR login page: http://10.49.135.173:8080/ScadaBR/login.htm
+- Attempted default credentials (admin / admin) and gained access to the admin account.
+- Landed on the watch list page: http://10.49.135.173:8080/ScadaBR/watch_list.shtm
+
+Step 3 — Enumerate the watch list and data sources
+- Found a point named "secret - test" in the watch list, but it returned the message: "The point or its data source may be disabled."
+- Navigated to the data sources page: http://10.49.135.173:8080/ScadaBR/data_sources.shtm
+- Identified a data source named "secret."
+
+Step 4 — Read Modbus registers
+- Attempted to read data using different register ranges within the secret data source.
+- Holding Register range with a count of 100 returned an Illegal Data Address error.
+- Reduced the register count to 20 and successfully read registers 0 through 14, which returned hex values.
+
+Step 5 — Decode the hex values
+- Passed the hex values from registers 0 to 14 into CyberChef using the From Hex operation with Auto delimiter.
+- The decoded output revealed the flag hidden across the register values.
+
+# What I Found
+- Open Port: 8080 (ScadaBR web interface)
+- Default Credentials Used: admin / admin
+- SCADA Platform: ScadaBR
+- Data Source: secret
+- Register Type: Holding Registers (registers 0 to 14)
+- Hex values decoded via CyberChef From Hex
+- Flag: THM{modbus_hid}
+
+# Key Learning
+OT and ICS environments frequently run on default credentials and expose management interfaces on non-standard ports that are missed in standard security reviews. Modbus is an unauthenticated protocol by design, meaning anyone with network access can read or write register values without any credentials. Sensitive data such as flags or configuration values can be hidden within holding registers and retrieved using standard Modbus read operations. CyberChef is an effective tool for quickly decoding raw hex output from industrial register reads.
+
+# What I Would Flag in a Real SOC
+- Default credentials (admin/admin) on a SCADA management interface is a critical finding and should be flagged as an immediate remediation priority in any OT security assessment
+- ScadaBR or any SCADA web interface exposed on a network-accessible port without authentication hardening represents a significant attack surface, particularly in environments connected to operational equipment
+- Modbus has no built-in authentication or encryption, all register reads and writes are unauthenticated, network-level segmentation and allowlisting are the primary compensating controls and should be verified
+- The Illegal Data Address error response from the Modbus device disclosed register boundary information to an unauthenticated user, error messages in OT environments should be suppressed or genericised where possible
+- Data stored in Modbus holding registers is readable by any device on the same network segment, sensitive configuration or operational values should never be stored in registers without additional access controls at the network layer
+- OT environments should be assessed separately from IT environments using OT-specific frameworks such as IEC 62443 or the NIST Guide to ICS Security, standard IT security tooling and assumptions do not always apply
