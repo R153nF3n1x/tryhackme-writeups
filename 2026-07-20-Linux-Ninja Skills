@@ -1,0 +1,89 @@
+# Room Name - TryHackMe: Ninja Skills
+Date: 20 July 2026
+Difficulty: Easy
+Category: Linux / File System Navigation
+
+# Scenario
+Practise your Linux skills and complete the challenges. The room involved locating hidden files scattered across the file system and answering questions about their properties using Linux commands such as find, grep, sha1sum, wc, and ls.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- Google (command reference)
+
+# What I Did
+
+Step 1 — Locate all target files across the file system
+- Used the find command with multiple -name flags combined using -o (OR) to locate all 12 target files in a single pass, suppressing permission errors with 2>/dev/null:
+```
+find / -type f \( -name 8V2L -o -name bny0 -o -name c4ZX -o -name D8B3 -o -name FHl1 -o -name oiM0 -o -name PFbD -o -name rmfX -o -name SRSq -o -name uqyw -o -name v2Vb -o -name X1Uy \) 2>/dev/null
+```
+- Located all file paths:
+  - /mnt/D8B3
+  - /mnt/c4ZX
+  - /var/FHl1
+  - /var/log/uqyw
+  - /opt/PFbD
+  - /media/rmfX
+  - /etc/8V2L
+  - /etc/ssh/SRSq
+  - /home/v2Vb
+  - /X1Uy
+
+Step 2 — Find files owned by best-group
+- Ran a group-based find from the home directory:
+```
+find -group best-group
+```
+- Returned: ./mnt/D8B3 and ./home/v2Vb
+
+Step 3 — Find the file containing an IP address
+- Used grep with a regex pattern for IPv4 addresses across all target files:
+```
+find / -exec grep -l '[0-9][0-9][.][0-9][0-9][.][0-9][0-9][.][0-9][0-9]' {} \; 2>/dev/null
+```
+- Identified the file containing an IP address: oiM0
+
+Step 4 — Find the file matching a specific SHA1 hash
+- Ran sha1sum against all target files simultaneously:
+```
+find / \( -name 8V2L -o -name bny0 -o -name c4ZX -o -name D8B3 -o -name FHl1 -o -name oiM0 -o -name PFbD -o -name rmfX -o -name SRSq -o -name uqyw -o -name v2Vb -o -name X1Uy \) -exec sha1sum {} \; 2>/dev/null
+```
+- Matched hash 9d54da7584015647ba052173b84d45e8007eba94 to file: c4ZX
+
+Step 5 — Find the file containing 230 lines
+- Used wc -l across all target files:
+```
+find / \( -name 8V2L -o -name bny0 -o -name c4ZX -o -name D8B3 -o -name FHl1 -o -name oiM0 -o -name PFbD -o -name rmfX -o -name SRSq -o -name uqyw -o -name v2Vb -o -name X1Uy \) -type f -exec wc -l {} \;
+```
+- Identified the file with 230 lines: bny0
+
+Step 6 — Find the file whose owner has UID 502
+- Used ls -ln to display numeric user and group IDs for all target files:
+```
+find / \( -name 8V2L -o -name bny0 -o -name c4ZX -o -name D8B3 -o -name FHl1 -o -name oiM0 -o -name PFbD -o -name rmfX -o -name SRSq -o -name uqyw -o -name v2Vb -o -name X1Uy \) -exec ls -ln {} \; 2>/dev/null
+```
+- Found: -rw-rw-r-- 1 502 501 ... /X1Uy confirming owner UID 502: X1Uy
+
+Step 7 — Find the file executable by everyone
+- Used the same ls -ln output from Step 6 to check file permissions.
+- Found: -rwxrwxr-x 1 501 501 ... /etc/8V2L confirming world-executable permissions: 8V2L
+
+# What I Found
+- File locations: /mnt/D8B3, /mnt/c4ZX, /var/FHl1, /var/log/uqyw, /opt/PFbD, /media/rmfX, /etc/8V2L, /etc/ssh/SRSq, /home/v2Vb, /X1Uy
+- Files owned by best-group: D8B3 v2Vb
+- File containing an IP address: oiM0
+- File matching SHA1 hash 9d54da7584015647ba052173b84d45e8007eba94: c4ZX
+- File containing 230 lines: bny0
+- File whose owner has UID 502: X1Uy
+- File executable by everyone: 8V2L
+
+# Key Learning
+The find command is extremely powerful for forensic file enumeration across a Linux file system. Combining multiple -name flags with -o allows all target files to be located in a single pass rather than running separate searches. Piping find results into sha1sum, wc, grep, and ls enables rapid property checks without manually navigating to each file location. Using 2>/dev/null suppresses permission denied errors and keeps output clean, which is essential when searching system directories as a non-root user.
+
+# What I Would Flag in a Real SOC
+- Files placed in unusual locations such as /X1Uy at the root level or /media/rmfX warrant immediate investigation as they do not belong to standard Linux directory conventions
+- World-executable files (rwxrwxr-x) should be audited regularly, a file that any user can execute is a potential privilege escalation or persistence vector if placed in a sensitive location
+- Files containing embedded IP addresses should be reviewed for potential C2 configuration, hardcoded beaconing targets, or credential files referencing internal infrastructure
+- Group ownership by a non-standard group such as best-group should be verified against the expected user and group policy, unexpected group assignments can indicate tampering or lateral movement artefacts
+- SHA1 is a deprecated hashing algorithm for security purposes, its presence in integrity checks should prompt a recommendation to migrate to SHA256 or stronger
