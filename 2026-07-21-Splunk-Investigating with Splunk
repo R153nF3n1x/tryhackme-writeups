@@ -1,0 +1,106 @@
+# Room Name - TryHackMe: Investigating with Splunk
+Date: 21 July 2026
+Difficulty: Easy
+Category: DFIR / SIEM / Splunk
+
+# Scenario
+Investigate anomalies using Splunk. The challenge involved querying a Splunk index to investigate a compromised Windows environment, identify a backdoor user created by an adversary, trace malicious PowerShell activity, and recover an encoded C2 URL.
+
+# Tools Used
+- TryHackMe Attack Box
+- Splunk (web interface)
+- CyberChef (Base64 decoder)
+
+# What I Did
+
+Step 1 — Count total ingested events
+- Launched Splunk using the target IP address.
+- Ran the following query with the time range set to All Time:
+```
+index="main"
+```
+- Total events returned: 12,256
+
+Step 2 — Identify the backdoor user
+- Searched for activity under the known compromised user James:
+```
+index="main" User="Cybertees\\James"
+```
+- Found a command line entry in the logs showing a net user /add command had been executed:
+  - ParentCommandLine: net user /add A1berto paw0rd1
+  - ParentImage: C:\Windows\System32\net.exe
+- Confirmed the backdoor username: A1berto
+
+Step 3 — Find the registry key updated for the backdoor user
+- Searched for registry modification events:
+```
+index="main" Category="Registry value set (rule: RegistryEvent)"
+```
+- Used the Fields panel to select TargetObject and filtered by Rare Values in the Statistics tab.
+- Found the registry path created for the backdoor account:
+  - HKLM\SAM\SAM\Domains\Account\Users\Names\A1berto\(Default)
+
+Step 4 — Identify the user being impersonated
+- From the backdoor username A1berto and a legitimate user field entry for Alberto, determined the adversary was impersonating: Alberto
+- The naming convention (A1berto vs Alberto) is a classic username impersonation technique using character substitution (l replaced with 1).
+
+Step 5 — Find the remote command used to add the backdoor user
+- Searched for CommandLine events referencing the backdoor creation:
+```
+index="main" commandline CommandLine="\"C:\\windows\\System32\\Wbem\\WMIC.exe\" /node:WORKSTATION6 process call create \"net user /add A1berto paw0rd1\""
+```
+- Confirmed the adversary used WMIC to remotely execute the net user /add command on WORKSTATION6.
+
+Step 6 — Check login attempts by the backdoor user
+- Searched for successful and failed login events attributed to A1berto:
+```
+index="main" EventID="4625" OR EventID="4624" A1berto
+```
+- Result: 0 login attempts observed, the account was created but never used to log in.
+
+Step 7 — Identify the infected host with malicious PowerShell activity
+- Searched for hostnames matching the known compromised user James:
+```
+index="main" Hostname="James*"
+```
+- Returned the full hostname: James.browne
+
+Step 8 — Count PowerShell logging events
+- Searched for PowerShell script block and module logging events:
+```
+index="main" powershell | stats count by EventID
+```
+- EventID 4103 (module logging) returned the malicious execution events.
+- Total PowerShell events logged: 79
+
+Step 9 — Decode the encoded PowerShell web request and recover the C2 URL
+- Queried EventID 4103 to find the Host Application field containing a Base64-encoded string:
+```
+index="main" EventID="4103"
+```
+- Extracted the Base64 value: aAB0AHQAcAA6AC8ALwAxADAALgAxADAALgAxADAALgA1AA==
+- Decoded using CyberChef with From Base64 and Remove Null Bytes operations, which returned: http://10.10.10.5
+- Found an additional path variable in the script: $t='/news.php'
+- Combined and defanged the full C2 URL: hxxp[://]10[.]10[.]10[.]5/news[.]php
+
+# What I Found
+- Total Events in index main: 12,256
+- Backdoor Username: A1berto
+- Registry Key Path: HKLM\SAM\SAM\Domains\Account\Users\Names\A1berto\(Default)
+- User Being Impersonated: Alberto
+- Remote Command Used: WMIC.exe /node:WORKSTATION6 process call create "net user /add A1berto paw0rd1"
+- Login Attempts by Backdoor User: 0
+- Infected Host: James.browne
+- Malicious PowerShell Events Logged: 79
+- C2 URL: hxxp[://]10[.]10[.]10[.]5/news[.]php
+
+# Key Learning
+Splunk's rare values filter is a powerful way to surface anomalous entries in high-volume fields such as TargetObject in registry events. Username impersonation using character substitution (Alberto vs A1berto) is a simple but effective technique that can bypass human review, making automated detection rules essential. Base64-encoded PowerShell commands are a standard obfuscation technique and should always be decoded and analysed as part of any PowerShell investigation. WMIC remote process creation is a legitimate Windows administration tool that is frequently abused for lateral movement and should be monitored closely in any environment.
+
+# What I Would Flag in a Real SOC
+- A net user /add command executed via WMIC from a remote node is a high-confidence lateral movement and persistence indicator and should trigger an immediate alert
+- Username creation that closely resembles an existing legitimate account (A1berto vs Alberto) is a username impersonation technique and should be caught by user provisioning anomaly detection
+- Registry modifications under HKLM\SAM\SAM\Domains\Account\Users\Names for a newly created account confirm persistence and should be correlated with the originating process
+- EventID 4103 and 4104 PowerShell logging should be enabled across all endpoints as a baseline, 79 events from a single malicious execution session demonstrates how much forensic value these logs provide
+- Base64-encoded PowerShell strings initiating outbound web requests are a strong indicator of a staged payload download or C2 beaconing and should be detected at both the endpoint and network egress layer
+- Zero login attempts from a backdoor account does not mean the account is harmless, its presence alone represents an undetected persistence mechanism that could be activated at any time
