@@ -1,0 +1,92 @@
+# Room Name - TryHackMe: Summit
+Date: 22 July 2026
+Difficulty: Easy
+Category: DFIR / Threat Detection / Pyramid of Pain
+
+# Scenario
+Can you chase a simulated adversary up the Pyramid of Pain until they finally back down? The challenge simulated a progressive threat detection exercise based on the Pyramid of Pain framework, requiring analysis of malware samples and application of increasingly impactful detection controls at each layer, from hash blocking up to behavioural TTPs.
+
+# Tools Used
+- TryHackMe Attack Box
+- Malware Sandbox (in-platform)
+- Hash Manager (in-platform)
+- Firewall Manager (in-platform)
+- DNS Filtering Tool (in-platform)
+- Sigma Rule Builder (in-platform)
+- Outgoing Connections Log (in-platform)
+- Command Log (in-platform)
+
+# What I Did
+
+**Level 1 — Hash (Trivial)**
+- Accessed the platform and opened the malicious email attachment in the malware sandbox for analysis.
+- Sandbox returned the following hashes for sample1.exe:
+  - MD5: cbda8ae000aa9cbe7c8b982bae006c2a
+  - SHA1: 83d2791ca93e58688598485aa62597c0ebbf7610
+  - SHA256: 9c550591a25c6228cb7d74d970d133d75c961ffed2ef7180144859cc09efca8c
+- Submitted the SHA256 hash to the Hash Manager tool to block sample1.exe from executing.
+
+**Level 2 — IP Address (Easy)**
+- Ran the malware sandbox on sample2.exe.
+- Analysis revealed an outbound connection to a malicious IP address: 154.35.10.113
+- Added a deny egress rule in the Firewall Manager to block all outbound traffic to that IP:
+  - Direction: Egress | Source: Any | Destination: 154.35.10.113 | Action: Deny
+
+**Level 3 — Domain (Simple)**
+- Ran the malware sandbox on sample3.exe.
+- Analysis revealed a malicious domain used for C2 communication: emudyn.bresonicz.info
+- Added a deny rule in the DNS Filtering tool to block resolution of the domain:
+  - Category: Malware | Domain: emudyn.bresonicz.info | Action: Deny
+
+**Level 4 — Host Artefacts (Annoying)**
+- Ran the malware sandbox on sample4.exe.
+- Analysis revealed registry modification activity targeting Windows Defender to disable real-time protection.
+- Built a Sigma rule using the Sigma Rule Builder:
+  - Log Source: Sysmon Event Logs
+  - Detection Type: Registry Modifications
+  - Registry Key: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Real-Time Protection
+  - Registry Name: DisableRealtimeMonitoring
+  - Value: 1
+  - ATT&CK ID: Defense Evasion (TA0005)
+
+**Level 5 — Tools (Challenging)**
+- Ran the malware sandbox on sample5.exe and reviewed the outgoing connections log included in the attachment.
+- Identified a beaconing pattern with consistent packet size and interval.
+- Built a Sigma rule to detect this network behaviour:
+  - Log Source: Sysmon Event Logs
+  - Detection Type: Network Connections
+  - Remote IP: Any
+  - Remote Port: Any
+  - Size (bytes): 97
+  - Frequency (seconds): 1800
+  - ATT&CK ID: Command and Control (TA0011)
+
+**Level 6 — TTPs (Tough)**
+- Reviewed the command log included in the final attachment to identify attacker behaviour at the TTP level.
+- Identified a process creation event where cmd.exe was used to write data to a temp file as part of an exfiltration routine.
+- Built a final Sigma rule targeting the specific command pattern:
+  - Log Source: Sysmon Event Logs
+  - Detection Type: Process Creations
+  - Process Name: cmd.exe
+  - CommandLine: Contains
+  - String: %temp%\exfiltr8.log
+  - ATT&CK ID: Exfiltration (TA0010)
+
+# What I Found
+- Flag 1 (Hash block — sample1.exe): THM{f3cbf08151a11a6a331db9c6cf5f4fe4}
+- Flag 2 (IP block — sample2.exe): THM{2ff48a3421a938b388418be273f4806d}
+- Flag 3 (Domain block — sample3.exe): THM{4eca9e2f61a19ecd5df34c788e7dce16}
+- Flag 4 (Registry Sigma rule — sample4.exe): THM{c956f455fc076aea829799c0876ee399}
+- Flag 5 (Network beacon Sigma rule — sample5.exe): THM{46b21c4410e47dc5729ceadef0fc722e}
+- Flag 6 (Exfiltration TTP Sigma rule): THM{c8951b2ad24bbcbac60c16cf2c83d92c}
+
+# Key Learning
+The Pyramid of Pain demonstrates that not all indicators of compromise are equally costly to the adversary. Blocking a hash takes seconds for an attacker to bypass by recompiling, while detecting a TTP like a specific exfiltration command pattern forces them to fundamentally change their tooling and behaviour. Moving defences up the pyramid from hashes to IP addresses to domains to host artefacts to tools to TTPs makes detection increasingly painful for the attacker. Sigma rules provide a vendor-agnostic way to encode behavioural detections that translate across SIEM platforms.
+
+# What I Would Flag in a Real SOC
+- Hash-based blocking alone provides minimal protection, adversaries trivially recompile or repack malware to change file hashes while preserving functionality, hash IOCs should be the starting point not the endpoint of detection
+- Outbound connections to hardcoded IP addresses are a strong indicator of unsophisticated C2, but IP blocking is equally easy to bypass by rotating infrastructure, network detections should focus on behavioural patterns rather than static indicators
+- Disabling Windows Defender real-time monitoring via registry modification is a well-documented defense evasion technique (T1562.001) and should trigger an immediate high-priority alert in any production SIEM
+- Beaconing traffic with a fixed packet size (97 bytes) and regular interval (every 30 minutes) is a classic C2 heartbeat pattern, network flow analysis tools should be configured to alert on statistically regular outbound traffic patterns
+- Writing exfiltration data to %temp%\exfiltr8.log via cmd.exe is a behavioural TTP that survives tool changes, Sigma rules targeting this pattern will catch the adversary regardless of which binary they use to execute it
+- TTP-level detections mapped to MITRE ATT&CK (TA0005, TA0011, TA0010) should be the primary focus of any mature SOC detection engineering programme as they are the hardest layer for adversaries to change
