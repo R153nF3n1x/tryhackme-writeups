@@ -36,7 +36,3 @@ Rules:
 ```
 
 ---
-
-## Related
-
-- [THM Write-Up Generator](https://github.com/R153nF3n1x/thm-writeup-generator) — terminal-styled offline markdown formatter that generates write-ups in this format
