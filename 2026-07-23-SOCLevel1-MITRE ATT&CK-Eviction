@@ -1,0 +1,72 @@
+# Room Name - TryHackMe: Eviction
+Date: 23 July 2026
+Difficulty: Easy
+Category: Threat Intelligence / MITRE ATT&CK
+
+# Scenario
+Unearth the monster from under your bed. The challenge involved using the MITRE ATT&CK Navigator to analyse the techniques and tactics of a specific APT group targeting E-corp, and helping analyst Sunny map the adversary's behaviour across the full attack lifecycle from reconnaissance to exfiltration.
+
+# Tools Used
+- TryHackMe Attack Box
+- MITRE ATT&CK Navigator (https://static-labs.tryhackme.cloud/sites/eviction/)
+
+# What I Did
+- Accessed the MITRE ATT&CK Navigator instance provided in the challenge.
+- Navigated through the ATT&CK matrix to identify the APT's techniques across each phase of the attack lifecycle.
+- Mapped each question to the relevant tactic and technique within the framework to identify the correct answers.
+
+**Reconnaissance and Initial Access**
+- Identified that the APT used Spearphishing Link as a technique that serves dual purpose, appearing in both the Reconnaissance and Initial Access phases.
+
+**Resource Development**
+- Identified that the APT targeted Email Accounts during the resource development phase to build capability for subsequent attacks.
+
+**Execution via User Execution**
+- Identified two User Execution sub-techniques the APT relied on to get the target to run malicious code: Malicious File and Malicious Link.
+
+**Scripting Interpreters**
+- Following successful user execution, identified the two scripting interpreters used by the APT for command execution: PowerShell and Windows Command Shell.
+
+**Persistence via Registry**
+- Found obfuscated scripts in the logs that modified the Windows registry. Identified Registry Run Keys as the persistence mechanism used to maintain access across reboots.
+
+**Defense Evasion via Living Off the Land**
+- Identified that the APT used Rundll32, a legitimate Windows system binary, for proxy execution to evade defences and blend in with normal system activity.
+
+**Discovery via Network Sniffing**
+- Identified the presence of tcpdump on a compromised host, attributing it to the APT's use of Network Sniffing for internal discovery and credential harvesting.
+
+**Lateral Movement**
+- Identified that the APT moved laterally by exploiting SMB/Windows Admin Shares, a common technique for spreading across Windows environments.
+
+**Collection from Information Repositories**
+- Identified SharePoint as the primary information repository targeted by the APT for intellectual property theft.
+
+**C2 and Exfiltration Proxies**
+- Identified the two proxy techniques the APT planned to use for data exfiltration to C2: External Proxy and Multi-hop Proxy.
+
+# What I Found
+- Recon and Initial Access technique: Spearphishing Link
+- Accounts targeted during Resource Development: Email Accounts
+- User Execution techniques: Malicious File and Malicious Link
+- Scripting Interpreters used: PowerShell and Windows Command Shell
+- Persistence registry mechanism: Registry Run Keys
+- Defense Evasion binary: Rundll32
+- Discovery technique: Network Sniffing
+- Lateral Movement technique: SMB/Windows Admin Shares
+- Targeted Information Repository: SharePoint
+- Exfiltration proxy techniques: External Proxy and Multi-hop Proxy
+
+# Key Learning
+The MITRE ATT&CK Navigator is a powerful tool for mapping an APT's known behaviour across the full attack lifecycle, enabling defenders to prioritise detection coverage based on which techniques are actively used by relevant threat actors. Some techniques span multiple tactics, such as Spearphishing Link appearing in both Reconnaissance and Initial Access, which reflects how real-world attacks blur phase boundaries. Living-off-the-land techniques like Rundll32 are particularly dangerous because they abuse trusted system binaries, making them harder to detect with signature-based controls alone.
+
+# What I Would Flag in a Real SOC
+- Spearphishing links that serve as both a reconnaissance and initial access vector should be detected at the email gateway with URL sandboxing and user click tracking enabled
+- Compromised email accounts used for resource development are difficult to detect without behavioural baselines, anomalous login locations, times, and forwarding rules should trigger alerts
+- PowerShell and Windows Command Shell execution spawned from Office applications or browser processes is a high-confidence indicator of malicious user execution and should be alerted on immediately
+- Registry Run Key modifications made by obfuscated scripts should be detected via file integrity monitoring and Sysmon EventID 13, correlated with the parent process responsible for the change
+- Rundll32 executing unusual DLLs or making network connections is a well-known LOLBin abuse pattern and should be monitored with process creation and network connection logging enabled
+- The presence of tcpdump or any packet capture tool on a host where it does not belong should trigger an immediate investigation, network sniffing tools placed by an adversary indicate active credential harvesting
+- SMB lateral movement to admin shares should be correlated with logon events and flagged when originating from non-standard hosts or user accounts at unusual hours
+- SharePoint access from compromised accounts or unusual IP addresses should be monitored via DLP and CASB tools, bulk document access or downloads are a strong collection indicator
+- Multi-hop proxy usage makes C2 traffic attribution difficult, focus on detecting the outbound connection patterns rather than the destination, consistent beacon intervals and unusual egress ports are key signals
