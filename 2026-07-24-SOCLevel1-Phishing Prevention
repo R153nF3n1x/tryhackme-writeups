@@ -1,0 +1,90 @@
+# Room Name - TryHackMe: SOC Level 1 - Phishing Prevention
+Date: 24 July 2026
+Difficulty: Easy
+Category: Phishing Analysis / SMTP / Wireshark / Traffic Analysis
+
+# Scenario
+Learn how to defend against phishing emails. The challenge involved analysing a PCAP file containing SMTP traffic using Wireshark, identifying blocked emails, examining email attachments, and analysing encoding methods used for potentially malicious payloads.
+
+# Tools Used
+- TryHackMe Attack Box
+- Wireshark (SMTP and IMF filters)
+
+# What I Did
+
+Step 1 — Filter SMTP traffic by response code
+- Used the following Wireshark filter to narrow results by SMTP response codes:
+```
+smtp.response.code
+```
+- Applied the filter for response code 220 to count Service Ready packets:
+```
+smtp.response.code == 220
+```
+- Result: 19 packets contained response code 220.
+
+Step 2 — Identify the blocked email response
+- Used the following filter to find emails blocked by spamhaus.org:
+```
+smtp.rsp.parameter contains "blocked"
+```
+- Located frame 156 which showed a 553 response code.
+- Full response message from the packet:
+```
+553 5.3.0 Email blocked using spamhaus.org - see <http://www.spamhaus.org> 173.66.46.112
+```
+- Full response code message: Requested action not taken: mailbox name not allowed (553)
+
+Step 3 — Count emails blocked for security issues
+- Applied the following filter to find response code 552:
+```
+smtp.response.code == 552
+```
+- Result: 6 messages were blocked for presenting potential security issues.
+
+Step 4 — Count total SMTP packets
+- Applied the base SMTP filter to count all available packets:
+```
+smtp
+```
+- Result: 512 SMTP packets available for analysis.
+
+Step 5 — Examine packet 270 for attachment details
+- Navigated to frame 270 and inspected the MIME multipart content.
+- Found the email was disguised as an undeliverable message notification sent to talkback@mozilla.org.
+- Identified the attachment name from the Content-Disposition field: document.zip
+- Identified the unresponsive host referenced in the message body: 212.253.25.152
+
+Step 6 — Identify the email client used to send the malicious attachment
+- Applied the following IMF filter to locate the email containing attachment.scr:
+```
+imf contains "attachment.scr"
+```
+- Found the X-Mailer header confirming the email client: Microsoft Outlook Express 6.00.2600.0000
+
+Step 7 — Identify the encoding used for the malicious attachment
+- Inspected the encapsulated multipart content for the attachment.scr file.
+- Found the Content-Transfer-Encoding header confirming the encoding method: base64
+
+# What I Found
+- Wireshark filter for SMTP response codes: smtp.response.code
+- Packets with response code 220: 19
+- Response code for spamhaus.org block: 553
+- Full response message: Requested action not taken: mailbox name not allowed (553)
+- Packets with response code 552: 6
+- Total SMTP packets: 512
+- Attachment in packet 270: document.zip
+- Unresponsive host IP: 212.253.25.152
+- Email client used: Microsoft Outlook Express 6.00.2600.0000
+- Encoding used for attachment.scr: base64
+
+# Key Learning
+SMTP response codes are a primary indicator for identifying blocked, rejected, or suspicious email activity in traffic captures. Response code 553 signals that a sending IP has been flagged by a reputation service such as spamhaus.org, while 552 indicates the server actively blocked a message for security reasons. Phishing emails frequently disguise malicious attachments within seemingly legitimate messages such as undeliverable notifications to lower the recipient's guard. Base64 encoding is the standard method for embedding binary attachments in SMTP traffic and is also commonly used to obfuscate malicious payloads such as .scr screensaver executables.
+
+# What I Would Flag in a Real SOC
+- Outbound SMTP traffic to external mail servers on port 25 from internal hosts should be monitored and restricted, legitimate internal users should route mail through a designated relay
+- A 553 block response from spamhaus.org on an outbound email indicates the sending IP has a poor reputation and should trigger a review of that host for potential compromise or misconfiguration
+- Emails with .scr file attachments should be blocked at the mail gateway, screensaver executables are a well-known malware delivery vector and have no legitimate business use case as email attachments
+- Base64-encoded attachments with application/octet-stream content type are a common obfuscation technique and should be inspected or sandboxed before delivery to the end user
+- Undeliverable bounce messages containing attachments are a classic phishing lure and should be treated as suspicious, legitimate mail delivery failures do not include binary attachments
+- The use of Microsoft Outlook Express 6.00.2600.0000, a client from 2001, in active SMTP traffic is a strong anomaly indicator and likely represents a spoofed or legacy system used for malicious mail delivery
