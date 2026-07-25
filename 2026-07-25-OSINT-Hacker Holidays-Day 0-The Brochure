@@ -1,0 +1,60 @@
+# Room Name - TryHackMe: The Brochure
+Date: 25 July 2026
+Difficulty: Easy
+Category: OSINT / Social Media Investigation / Steganography
+
+# Scenario
+The brochure's hero photo has an AI fingerprint. Follow the account that posted it, and the trail does not end at the hotel — it ends at someone the hotel never mentioned. The challenge involved tracing a digital footprint from a hotel brochure image through Instagram accounts to uncover a hidden flag encoded in Base64 fragments spread across multiple posts.
+
+# Tools Used
+- TryHackMe Attack Box
+- Task Files (thebrochure.png)
+- Browser
+- Instagram
+- CyberChef (Base64 decoder)
+
+# What I Did
+
+Step 1 — Examine the task file
+- Downloaded and extracted the task files.
+- Located the brochure image at:
+```
+C:\Users\HP\AppData\Local\Temp\317aa754-978f-44a8-955a-1ebf18a70b37_attachments-1784426010065.zip.b37\thebrochure.png
+```
+- Examined the brochure and identified a reference to finding the resort's Instagram account.
+
+Step 2 — Locate the hotel Instagram account
+- Searched Instagram for the resort and found the official account: @thebytelotusresort
+- The account had only two uploaded photos, and no suspicious followers were identified.
+
+Step 3 — Pivot to the following list
+- Noticed the account was following only one other account: @veratheconcierge
+- This was flagged as the AI concierge account referenced in the room scenario.
+
+Step 4 — Extract the Base64 fragments
+- Examined the three photos uploaded to @veratheconcierge.
+- Each photo contained a string of characters embedded within it.
+- Combined the three character strings in order to form a complete Base64 encoded string:
+```
+VEhNe1YzckBzX2FDQzB1bnRfaDRzX2IzM25fZjB1bmQhfQ==
+```
+
+Step 5 — Decode the Base64 string
+- Passed the combined string into CyberChef using the From Base64 operation.
+- Decoded output revealed the flag.
+
+# What I Found
+- Hotel Instagram account: @thebytelotusresort
+- AI concierge account: @veratheconcierge
+- Base64 string: VEhNe1YzckBzX2FDQzB1bnRfaDRzX2IzM25fZjB1bmQhfQ==
+- Flag: THM{V3r@s_aCC0unt_h4s_b33n_f0und!}
+
+# Key Learning
+Social media following relationships are a powerful OSINT pivot point. Rather than focusing only on who follows an account, examining who an account follows can reveal undisclosed connections and hidden personas. Splitting encoded data across multiple posts is a steganographic technique used to avoid detection by any single content scan, requiring the investigator to correlate content across multiple sources before the full payload becomes visible. CyberChef remains the go-to tool for quick Base64 decoding during OSINT investigations.
+
+# What I Would Flag in a Real SOC
+- Social media accounts associated with a corporate brand that are following undisclosed third-party accounts should be reviewed, each following relationship is a potential data leakage or reputational risk vector
+- AI-generated images used in official marketing materials that trace back to accounts not disclosed by the organisation indicate a lack of digital asset governance and should prompt a full social media audit
+- Encoded strings split across multiple social media posts are a data exfiltration technique that evades keyword-based content moderation and DLP tools, correlation across posts from the same account is necessary to detect this
+- Any account linked to a corporate brand that posts character strings or encoded content should be flagged for investigation as a potential covert channel
+- Brand impersonation or undisclosed affiliate accounts on social platforms should be monitored via automated brand protection tools that scan for lookalike usernames and cross-account following relationships
