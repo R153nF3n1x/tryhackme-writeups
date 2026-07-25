@@ -1,0 +1,133 @@
+# Room Name - TryHackMe: Phishing Analysis Tools
+Date: 25 July 2026
+Difficulty: Easy
+Category: Phishing Analysis / Email Forensics / Malware Analysis
+
+# Scenario
+Learn the tools used to aid an analyst to investigate suspicious emails. As a level 1 SOC analyst, investigate multiple suspicious emails escalated by coworkers, extract key indicators of compromise, and identify signs of malicious activity to help the team develop detection rules.
+
+# Tools Used
+- TryHackMe Attack Box
+- Thunderbird (email client / message source viewer)
+- ANYRUN (online malware sandbox)
+- Phish3Case1.eml (task file)
+
+# What I Did
+
+**Case 1 — Your Account is On Hold (Netflix phishing)**
+
+Step 1 — Identify the impersonated brand
+- Opened Phish3Case1.eml in Thunderbird on the Attack Box.
+- Examined the From field:
+```
+Netflix<JGQ47wazXe1xYVBrkeDg-JOg7ODDQwWdR@JOg7ODDQwWdR-yVkCaBkTNp.gogolecloud.com>
+```
+- Subject line read: Y o u r N e t f l i x A c c o u n t i s o n H o l d
+- Spacing between characters in the subject is a deliberate obfuscation technique to bypass keyword filters.
+- Confirmed impersonated brand: Netflix
+
+Step 2 — Identify the intended recipient
+- Checked the To field and found the recipient: redacted@yahoo.com
+
+Step 3 — Extract the originating IP from headers
+- Used View > Message Source in Thunderbird to inspect raw headers.
+- Found the originating IP in the Received field:
+```
+Received: from 10.197.37.234
+```
+
+Step 4 — Identify the domain of interest from Return-Path
+- Located the Return-Path field in the message source:
+```
+Return-Path: <postmaster@etekno.xyz>
+```
+- Domain of interest: etekno.xyz (not associated with Netflix)
+
+Step 5 — Investigate the Update Account Now button
+- Inspected the link behind the Update Account Now call to action in the email body.
+- Found a shortened URL used to obscure the final destination: https://t.co/yuxfZm8KPg?amp=1
+
+**Case 2 — Update Payment Details (PDF attachment)**
+
+Step 6 — Review the ANYRUN sandbox analysis
+- Accessed the provided ANYRUN sandbox report for the suspected phishing email.
+- ANYRUN classified the file as: Suspicious activity
+- Identified the PDF attachment name: Payment-updateid.pdf
+
+Step 7 — Extract PDF hashes
+- Retrieved the SHA256 hash from the ANYRUN analysis:
+```
+cc6f1a04b10bcb168aeec8d870b97bd7c20fc161e8310b5bce1af8ed420e2c24
+```
+
+Step 8 — Identify the malicious IP associated with AcroRd32.exe
+- Reviewed the ANYRUN text report for network activity linked to the PDF reader process.
+- Found the following entry flagged as malicious:
+```
+AcroRd32.exe -> 2.16.107.24:443 -> acroipm2.adobe.com -> malicious
+```
+- Malicious IP: 2.16.107.24
+
+Step 9 — Identify the process flagged as Potentially Bad Traffic
+- Found the following entry in the ANYRUN text report:
+```
+svchost.exe -> Potentially Bad Traffic -> ET INFO TLS Handshake Failure
+```
+- Process flagged: svchost.exe
+
+**Case 3 — Excel Executable (CVE-2017-11882)**
+
+Step 10 — Review the ANYRUN sandbox analysis for the Excel attachment
+- Accessed the second ANYRUN sandbox analysis.
+- ANYRUN classified the .xlsx attachment as: Malicious activity
+- Identified the file name: CBJ200620039539.xlsx
+
+Step 11 — Extract Excel attachment hashes
+- Retrieved the SHA256 hash from the ANYRUN analysis:
+```
+5f94a66e0ce78d17afc2dd27fc17b44b3ffc13ac5f42d3ad6a5dcfb36715f3eb
+```
+
+Step 12 — Identify malicious IP and domains
+- Reviewed the ANYRUN text report for network connections from EQNEDT32.EXE:
+```
+EQNEDT32.EXE -> GET -> 204.11.56.48:80 -> http://biz9holdings.com/INVOICE/COVID19.exe -> malicious
+```
+- IP associated with biz9holdings.com: 204.11.56.48
+- Second malicious domain identified: findresults.site (IP: 103.224.182.251)
+
+Step 13 — Identify the exploited vulnerability
+- Found the following ANYRUN detection in the report:
+```
+Equation Editor starts application (CVE-2017-11882) — EQNEDT32.EXE (PID: 1068)
+```
+- CVE-2017-11882 is a critical remote code execution vulnerability in the Microsoft Office Equation Editor that allows arbitrary code execution when a malicious document is opened.
+
+# What I Found
+- Impersonated brand: Netflix
+- Intended recipient: redacted@yahoo.com
+- Originating IP: 10.197.37.234
+- Domain of interest (Return-Path): etekno.xyz
+- Shortened URL: https://t.co/yuxfZm8KPg?amp=1
+- ANYRUN classification (PDF): Suspicious activity
+- PDF attachment name: Payment-updateid.pdf
+- PDF SHA256: cc6f1a04b10bcb168aeec8d870b97bd7c20fc161e8310b5bce1af8ed420e2c24
+- Malicious IP (AcroRd32.exe): 2.16.107.24
+- Potentially bad traffic process: svchost.exe
+- ANYRUN classification (Excel): Malicious activity
+- Excel attachment name: CBJ200620039539.xlsx
+- Excel SHA256: 5f94a66e0ce78d17afc2dd27fc17b44b3ffc13ac5f42d3ad6a5dcfb36715f3eb
+- IP for biz9holdings.com: 204.11.56.48
+- Second malicious domain: findresults.site
+- Exploited vulnerability: CVE-2017-11882
+
+# Key Learning
+Phishing emails impersonating reputable brands frequently use lookalike sending domains and obfuscated subject lines to bypass automated filters. Character spacing within subject lines such as "Y o u r N e t f l i x" is a deliberate keyword evasion technique that analysts must recognise visually rather than relying on automated detection alone. Sandbox tools like ANYRUN are essential for safely detonating suspicious attachments and observing real-time process behaviour, network connections, and threat classifications without risking live infrastructure. CVE-2017-11882, despite being patched in 2017, remains actively exploited in phishing campaigns through malicious Excel files targeting unpatched systems running the legacy Equation Editor.
+
+# What I Would Flag in a Real SOC
+- A sender domain that does not match the impersonated brand (gogolecloud.com vs netflix.com) should be blocked at the email gateway and the sending IP added to the deny list
+- The Return-Path domain etekno.xyz differing from the display From address is a strong email spoofing indicator and should trigger an SPF and DMARC verification check
+- Shortened URLs embedded in email call-to-action buttons bypass URL reputation checks and should be expanded and sandboxed before delivery, URL shorteners in email bodies are a high-confidence phishing indicator
+- AcroRd32.exe making outbound connections to flagged IPs on port 443 indicates the PDF is attempting to beacon or download a secondary payload, PDF reader processes should not be making unsolicited outbound connections
+- EQNEDT32.EXE spawning any child process or making network connections is a definitive indicator of CVE-2017-11882 exploitation, this process should be blocked from executing entirely on any patched system
+- The presence of COVID19.exe as a filename in a download URL is a social engineering lure and all executable downloads from unknown domains should be blocked at the proxy or firewall egress layer
