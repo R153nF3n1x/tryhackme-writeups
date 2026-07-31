@@ -1,0 +1,97 @@
+# Room Name - TryHackMe: Packed Light
+Date: 30 July 2026
+Difficulty: Easy
+Category: Network Forensics / PCAP Analysis / Covert Channel Detection
+
+# Scenario
+Tiny packets. Odd hours. Suspiciously regular. Someone is smuggling out the data equivalent of a hotel towel every night, folded neatly inside traffic that looks ordinary until you decode it. The challenge involved analysing a network capture from the guest network, identifying a covert C2 beaconing channel hidden inside HTTP cookie headers, reassembling the exfiltrated data, and decoding it using a brute-forced XOR key to recover the flag.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- tshark (Wireshark CLI)
+- Python 3
+
+# What I Did
+
+Step 1 — Get a protocol overview of the capture
+- Opened the PCAP file and generated a protocol hierarchy summary to identify all traffic types:
+```
+tshark -r traffic.pcapng -q -z io,phs
+```
+- Identified a mix of protocols including HTTP, TLS, QUIC, DNS, and SSDP. HTTP traffic on port 8080 was flagged as the primary area of interest based on the hint from @0xMia.
+
+Step 2 — Isolate the beaconing traffic on port 8080
+- Filtered for all TCP traffic on port 8080 and extracted key fields:
+```
+tshark -r traffic.pcapng -Y "tcp.port == 8080" -T fields \
+  -e frame.number -e ip.src -e ip.dst \
+  -e http.request.method -e http.request.uri \
+  -e frame.time_relative
+```
+- Confirmed repeated GET / requests to 34.41.103.191:8080 spaced roughly one second apart, consistent with a classic C2 beaconing pattern.
+
+Step 3 — Inspect the HTTP request headers
+- Extracted User-Agent and cookie values from all HTTP requests:
+```
+tshark -r traffic.pcapng -Y "http.request" -T fields \
+  -e frame.number -e http.request.uri \
+  -e http.user_agent -e http.cookie
+```
+- Found two suspicious indicators:
+  - User-Agent: ByteLotusClient/1.1 (not a real browser or application)
+  - Cookie: hotel_sess_state= with a short Base64-looking value that changed on every request
+
+Step 4 — Extract all cookie values in order
+- Pulled the raw cookie header values from every HTTP request into a file for analysis:
+```
+tshark -r traffic.pcapng -Y "http.request and http.cookie" \
+  -T fields -e http.cookie > cookies_raw.txt
+```
+- Confirmed the cookie value changed with each beacon, indicating data was being smuggled out one small chunk at a time.
+
+Step 5 — Decode and reassemble the exfiltrated data
+- Wrote a Python script to Base64-decode each cookie value and concatenate the bytes in transmission order:
+```python
+import base64
+data = bytearray()
+with open('cookies_raw.txt') as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        key, val = line.split('=', 1)
+        data += base64.b64decode(val)
+print(list(data))
+```
+- Recovered 30 raw bytes that were not readable as plain text, confirming an additional obfuscation layer was present.
+
+Step 6 — Brute-force the XOR key
+- Based on the @0xMia hint referencing crypto, attempted single-byte XOR brute force across all 256 possible keys:
+```python
+for k in range(256):
+    out = bytes([b ^ k for b in data])
+    if b'THM{' in out:
+        print(k, out)
+```
+- Key 72 (0x48) produced the readable flag.
+
+# What I Found
+- Beaconing destination: 34.41.103.191:8080
+- Beacon interval: approximately 1 second
+- Suspicious User-Agent: ByteLotusClient/1.1
+- Covert channel: hotel_sess_state cookie header (Base64-encoded, changing per request)
+- Total exfiltrated bytes reassembled: 30 bytes
+- Obfuscation method: single-byte XOR with key 72 (0x48)
+- Flag: THM{V3r4_1s_w4tch1ng_0veR_y0u}
+
+# Key Learning
+This room demonstrated a complete covert data exfiltration chain: periodic beaconing disguised as normal HTTP traffic, payload hidden inside a cookie header rather than the request body, Base64 encoding to keep the values printable, and single-byte XOR to obfuscate the payload from shallow inspection. Each layer on its own looks almost ordinary, which is exactly why this pattern is used in real malware C2 traffic. The key analytical steps were recognising the beacon regularity, noticing the cookie value changing on every request, reassembling the chunks in order, and then brute-forcing a simple symmetric key once plain decoding produced unreadable bytes.
+
+# What I Would Flag in a Real SOC
+- Regular outbound HTTP GET requests to a non-standard port (8080) at a fixed one-second interval from a guest network device is a high-confidence C2 beaconing indicator and should trigger an immediate alert
+- A User-Agent string of ByteLotusClient/1.1 does not match any known browser or application and should be blocked at the proxy and flagged as a custom implant signature
+- HTTP cookie headers with Base64-encoded values that change on every request but have no corresponding Set-Cookie response from the server are a strong indicator of a covert exfiltration channel and should be inspected by DLP tooling
+- Outbound connections from guest network devices to external IPs on port 8080 should be blocked by default, guest WiFi should have no direct internet egress on non-standard ports without explicit authorisation
+- The XOR-obfuscated payload would evade basic content inspection but would be caught by entropy analysis, high-entropy cookie values with consistent length and format should be flagged for deeper inspection
+- Network flow analysis tools should be configured to alert on statistically regular beacon intervals, a connection that fires exactly every second for an extended period is not human-generated traffic
