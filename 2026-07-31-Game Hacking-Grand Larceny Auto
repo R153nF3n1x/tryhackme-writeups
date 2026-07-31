@@ -1,0 +1,70 @@
+# Room Name - TryHackMe: Grand Larceny Auto
+Date: 31 July 2026
+Difficulty: Easy
+Category: Reverse Engineering / Game Hacking / Cryptography
+
+# Scenario
+Reverse-engineer a small 3D crime game to break into a vault the developers made unreachable. Los Vanto's dumbest crime sim — steal traffic cones, borrow hatchbacks, annoy the locals, and outrun the cops. Legend has it that a sealed safehouse vault only opens for the truest criminals. Nobody has ever managed to open it.
+
+# Tools Used
+- Windows System (required — challenge not compatible with AttackBox)
+- GrandLarcenyAuto.exe (game executable)
+- ikdasm (IL disassembler for .NET/C# DLL analysis)
+
+# What I Did
+
+Step 1 — Disassemble the game DLL to understand the vault logic
+- Used ikdasm to disassemble GrandLarcenyAuto.dll and located the SafehouseVault.TryOpen() method and CryptoUtil class.
+- Identified the vault unlock condition and decryption logic from the decompiled C# source:
+```csharp
+if (player.WantedStars < 6)
+    return "The vault stays shut. (You need SIX stars.)";
+
+byte[] key = CryptoUtil.DeriveKey(player.WantedStars);
+// DeriveKey = SHA256(UTF8("GLA::vault::key::v1::stars=" + stars))
+
+byte[] decrypted = CryptoUtil.Xor(SealedBlob, key);
+// repeating-key XOR: decrypted[i] = SealedBlob[i] ^ key[i % key.Length]
+
+string flag = Encoding.UTF8.GetString(decrypted);
+return "THE VAULT SWINGS OPEN\n\nFLAG: " + flag;
+```
+- Confirmed the vault requires exactly 6 wanted stars to derive the correct decryption key.
+
+Step 2 — Identify and avoid the decoy flag
+- Found a separate CheatConsole.Submit() method triggered by pressing K in-game.
+- The method checks for a hardcoded cheat code: L0SV4NT0S247
+- Submitting this returns a deliberately wrong troll flag: THM{ch34t_c0d3s_4r3_f0r_t0ur1sts}
+- This was confirmed as a decoy planted by the developers to catch people who skip the intended puzzle.
+
+Step 3 — Assess static extraction feasibility
+- Confirmed the SealedBlob bytes are wrapped in ConfuserEx obfuscation (evidenced by ConfusedByAttribute in assembly metadata).
+- Determined that extracting and decrypting the blob offline in Python was not practical without deobfuscation tooling.
+- Concluded the intended solution is to reach 6 wanted stars in-game and trigger the vault decryption at runtime.
+
+Step 4 — Reach 6 wanted stars in-game
+- Ran GrandLarcenyAuto.exe on a Windows system.
+- Committed crimes including car theft and evading police to accumulate wanted stars up to the maximum level of 6.
+
+Step 5 — Open the vault
+- Navigated to the vault location in-game and approached the VAULT sign.
+- Pressed F to interact with the vault once 6 stars were active.
+- The game derived the key from the live WantedStars value, decrypted SealedBlob, and printed the flag in the vault open message.
+
+# What I Found
+- Vault unlock condition: WantedStars == 6
+- Key derivation method: SHA256(UTF8("GLA::vault::key::v1::stars=6"))
+- Encryption method: repeating-key XOR
+- Decoy flag (cheat code K): THM{ch34t_c0d3s_4r3_f0r_t0ur1sts} (intentional troll — not submitted)
+- Vault interaction key: F (when adjacent to vault with 6 stars)
+- Flag: THM{h0tf1x3d_my_0wn_w4nt3d_l3v3l}
+
+# Key Learning
+Game executables built on engines like Godot with .NET/C# backends are highly reversible using standard IL disassembly tools such as ikdasm or dnSpy. Understanding the decryption logic statically (SHA256-derived key, repeating XOR) is straightforward once the DLL is decompiled, but ConfuserEx obfuscation on the encrypted blob prevents full offline extraction without additional deobfuscation steps. This room also demonstrated a classic CTF design pattern: planting a convincing decoy flag via a discoverable cheat code to mislead analysts who find the shortcut rather than the intended path. The real flag only materialises at runtime when the correct game state is achieved, reinforcing that some challenges require dynamic execution rather than pure static analysis.
+
+# What I Would Flag in a Real SOC
+- Client-side game executables that perform decryption using a key derived entirely from local game state are vulnerable to runtime manipulation, an attacker can patch the WantedStars value in memory to unlock any condition without playing legitimately
+- Hardcoded cheat codes stored in plaintext within compiled DLLs are trivially discoverable through disassembly and represent a design flaw in any application where those codes grant meaningful access or bypass security controls
+- ConfuserEx obfuscation provides a meaningful barrier against casual static analysis but should not be treated as a security control, dedicated deobfuscation tools and dynamic analysis will defeat it given sufficient motivation
+- Decoy flags and honeypot credentials embedded in applications are a legitimate defensive technique for detecting and misleading attackers, the same principle applies to production systems where fake credentials can alert defenders when accessed
+- Any application that derives encryption keys from user-controlled input (such as a game stat value) is vulnerable to key prediction if the derivation algorithm is known, cryptographic keys must be generated from a secret source that the user cannot observe or manipulate
