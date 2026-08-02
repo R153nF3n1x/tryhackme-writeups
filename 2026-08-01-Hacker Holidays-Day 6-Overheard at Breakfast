@@ -1,0 +1,72 @@
+# Room Name - TryHackMe: Overheard at Breakfast
+Date: 01 August 2026
+Difficulty: Easy
+Category: OSINT / Email Hash / Gravatar Enumeration
+
+# Scenario
+Two strangers. One conversation. One profile they never meant to reveal. A breakfast terrace screenshot captured a chat between two guests before it could disappear. Somewhere in that conversation is enough to track down an account nobody was supposed to find.
+
+# Tools Used
+- TryHackMe Task Files (conversation.png)
+- Python 3 (hashlib)
+- Browser
+- CyberChef (Base64 decoder)
+
+# What I Did
+
+Step 1 — Extract the task file and examine the screenshot
+- Downloaded and extracted the task archive.
+- Opened conversation.png, a screenshot of a chat between Ponzi (Influencer) and Lambo.
+- Read the conversation carefully as hinted by @0xMia's story: "actually READ what they said, not just skim it."
+- Identified key details in the chat:
+  - Email address visible: lambobytelotushotel@gmail.com
+  - Lambo mentioned a social media account being wiped and a free tool that allowed profile uploads and linking of other media accounts, described as starting with a G.
+
+Step 2 — Identify the platform
+- The clue "started with a G" combined with email-based profile lookups pointed to Gravatar, a globally recognised avatar and profile service that uses email hashes as profile identifiers.
+
+Step 3 — Generate the email hash
+- Gravatar uses the SHA256 hash of the lowercase, trimmed email address to construct profile URLs.
+- Generated the hash using Python:
+```python
+import hashlib
+email = 'lambobytelotushotel@gmail.com'
+email_clean = email.strip().lower()
+sha256 = hashlib.sha256(email_clean.encode()).hexdigest()
+print('SHA256:', sha256)
+```
+- SHA256 result: d43faafe9d7f056793bd037b8d6e321acad985c222d83775b10d6539e301e931
+
+Step 4 — Locate the hidden Gravatar profile
+- Constructed the Gravatar profile URL using the SHA256 hash:
+```
+https://gravatar.com/d43faafe9d7f056793bd037b8d6e321acad985c222d83775b10d6539e301e931
+```
+- Found the profile for Lambo (Lam-boh, Byte Lotus Hotel) with the following message embedded in the bio:
+```
+Funny thing about email hashes, they follow you places you didn't expect.
+Glad you found the right corner of the internet! Here is your prize:
+VEhNe1MzY3JlVF9QcjBmaWwzX0g0c19iMzNuX0lkZW50MWZpM2R9
+```
+
+Step 5 — Decode the Base64 prize
+- Passed the encoded string into CyberChef using the From Base64 operation.
+- Decoded output revealed the flag.
+
+# What I Found
+- Email address from screenshot: lambobytelotushotel@gmail.com
+- Platform identified: Gravatar (starts with G, links social/media accounts via profile)
+- SHA256 of email: d43faafe9d7f056793bd037b8d6e321acad985c222d83775b10d6539e301e931
+- Gravatar profile URL: https://gravatar.com/d43faafe9d7f056793bd037b8d6e321acad985c222d83775b10d6539e301e931
+- Encoded flag (Base64): VEhNe1MzY3JlVF9QcjBmaWwzX0g0c19iMzNuX0lkZW50MWZpM2R9
+- Flag: THM{S3creT_Pr0fil3_H4s_b33n_Ident1fi3d}
+
+# Key Learning
+Gravatar constructs profile URLs using the SHA256 hash of a user's email address, meaning anyone who knows your email can locate your Gravatar profile without your knowledge or consent. This is a form of persistent digital identity linkage that follows an email address across any platform that uses Gravatar for avatars, including GitHub, WordPress, and Slack. An email address overheard, photographed, or leaked in any context can be converted into a profile lookup in seconds. The SHA256 construction replaced the older MD5 hash in 2024, but the underlying privacy implication remains the same.
+
+# What I Would Flag in a Real SOC
+- Email addresses visible in screenshots or chat exports are high-value OSINT artefacts, any screenshot sharing policy should treat visible email addresses as sensitive PII requiring redaction before distribution
+- Gravatar and similar email-hash-based identity services create a passive tracking vector, an attacker with only an email address can discover linked profile information, biography, and connected social accounts without any interaction with the target
+- Employees or guests mentioning internal platform details such as hotel-specific email addresses in casual conversations represent an OPSEC failure, awareness training should cover what constitutes sensitive information in social contexts
+- Base64-encoded content found in user-controlled profile fields is a data hiding technique worth flagging in any platform monitoring programme, encoded strings in bios or descriptions may contain exfiltrated data or instructions
+- The combination of a leaked email address and a linked third-party profile service can rapidly expand an attacker's knowledge of a target's online presence, threat intelligence programmes should include monitoring for corporate email addresses appearing on public profile platforms
