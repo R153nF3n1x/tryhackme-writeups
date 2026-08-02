@@ -1,0 +1,114 @@
+# Room Name - TryHackMe: New Hire Old Artifacts
+Date: 02 August 2026
+Difficulty: Easy
+Category: DFIR / SIEM / Splunk / Threat Hunting
+
+# Scenario
+You are a SOC Analyst for TryNotHackMe, an MSSP. A newly onboarded customer, Widget LLC, has concerns about a Finance Dept endpoint belonging to a recently hired Financial Analyst. During December 2021 the endpoint security product was turned off and no formal investigation was conducted. Your task is to sift through Sysmon logs in Widget LLC's Splunk instance and determine whether a breach occurred during that window.
+
+# Tools Used
+- TryHackMe Attack Box
+- Splunk (SPL queries)
+- Sysmon Operational logs (EventCodes 1, 3, 7, 12, 13, 14)
+
+# What I Did
+
+**Investigation setup**
+- Accessed the Splunk instance at http://10.48.177.33:8000 and scoped the investigation to the Finance Dept workstation DESKTOP-H1ATIJC for December 2021.
+- Focused on Sysmon EventCodes: 1 (process creation), 3 (network connection), 7 (image load), and 12/13/14 (registry events).
+
+**Q1 — Identify the web browser password viewer binary**
+- Queried for executable images to find unusual binaries running from Temp directories:
+```
+Image="*.exe" | dedup Image | table Image
+```
+- Identified the password recovery tool at:
+```
+C:\Users\FINANC~1\AppData\Local\Temp\11111.exe
+```
+
+**Q2 — Identify the company behind the binary**
+- Queried the Company metadata field for the identified binary:
+```
+Image="C:\\Users\\FINANC~1\\AppData\\Local\\Temp\\11111.exe" | table Company | dedup Company
+```
+- Company: NirSoft (a legitimate tool repurposed for credential harvesting)
+
+**Q3 — Find the second suspicious binary and its original filename**
+- Searched for other executables in the same Temp directory and examined OriginalFileName metadata:
+```
+Image="C:\\Users\\Finance01\\AppData\\Local\\Temp\\IonicLarge.exe" | table OriginalFileName | dedup OriginalFileName
+```
+- Binary: IonicLarge.exe, Original filename: PalitExplorer.exe (renamed to evade detection)
+
+**Q4 — Identify outbound malicious IP connections**
+- Queried network connection events for IonicLarge.exe:
+```
+Image="C:\\Users\\Finance01\\AppData\\Local\\Temp\\IonicLarge.exe" | table DestinationIp | dedup DestinationIp
+```
+- Malicious IP (defanged): 2[.]56[.]59[.]42
+
+**Q5 — Identify the registry key modified by the binary**
+- Queried for registry SetValue events from IonicLarge.exe:
+```
+Image="C:\\Users\\Finance01\\AppData\\Local\\Temp\\IonicLarge.exe" EventType="SetValue" | table TargetObject | dedup TargetObject
+```
+- Registry key targeted: HKLM\SOFTWARE\Policies\Microsoft\Windows Defender
+
+**Q6 — Identify binaries killed and deleted by the attacker**
+- Searched for taskkill events and reviewed parent command line arguments:
+```
+taskkill | table ParentCommandLine | dedup ParentCommandLine
+```
+- Two binaries killed and deleted: WvmIOrcfsuILdX6SNwIRmGOJ.exe and phcIAmLJMAIMSa9j9MpgJo1m.exe
+
+**Q7 — Identify the last PowerShell Windows Defender tampering command**
+- Queried PowerShell process creation events and reviewed CommandLine values with timestamps:
+```
+powershell | table CommandLine,UtcTime | dedup CommandLine
+```
+- Last command in the series:
+```
+powershell WMIC /NAMESPACE:\\root\Microsoft\Windows\Defender PATH MSFT_MpPreference call Add ThreatIDDefaultAction_Ids=2147737394 ThreatIDDefaultAction_Actions=6 Force=True
+```
+
+**Q8 — Extract all four threat IDs in execution order**
+- Reviewed the full series of WMIC MSFT_MpPreference commands ordered by UtcTime.
+- Threat IDs in execution order: 2147735503, 2147737010, 2147737007, 2147737394
+
+**Q9 — Find the second malicious binary from a different AppData location**
+- Searched for executables across all AppData subdirectories:
+```
+Image="C:\\Users\\*\\AppData\\*.exe" | table Image | dedup Image
+```
+- Found: C:\Users\Finance01\AppData\Roaming\EasyCalc\EasyCalc.exe (fake calculator application built on the NW.js/Chromium embedded framework)
+
+**Q10 — Identify DLLs loaded by the EasyCalc binary**
+- Queried image load events (EventCode 7) for DLLs loaded by EasyCalc.exe:
+```
+Image="C:\\Users\\Finance01\\AppData\\Roaming\\EasyCalc\\EasyCalc.exe" ImageLoaded="*.dll" | table ImageLoaded | dedup ImageLoaded
+```
+- DLLs loaded (alphabetical order): ffmpeg.dll, nw.dll, nw_elf.dll
+
+# What I Found
+- Browser password viewer: C:\Users\FINANC~1\AppData\Local\Temp\11111.exe
+- Company behind the tool: NirSoft
+- Second suspicious binary: IonicLarge.exe, original filename: PalitExplorer.exe
+- Malicious outbound IP: 2[.]56[.]59[.]42
+- Registry key modified: HKLM\SOFTWARE\Policies\Microsoft\Windows Defender
+- Killed and deleted binaries: WvmIOrcfsuILdX6SNwIRmGOJ.exe, phcIAmLJMAIMSa9j9MpgJo1m.exe
+- Last Defender tampering command: WMIC MSFT_MpPreference ThreatIDDefaultAction_Ids=2147737394 Actions=6
+- Threat IDs in execution order: 2147735503, 2147737010, 2147737007, 2147737394
+- Second malicious binary: C:\Users\Finance01\AppData\Roaming\EasyCalc\EasyCalc.exe
+- DLLs loaded by EasyCalc: ffmpeg.dll, nw.dll, nw_elf.dll
+
+# Key Learning
+This investigation confirmed a multi-stage intrusion during the period when endpoint protection was disabled. The attacker delivered a NirSoft credential harvesting tool and a renamed C2 binary (IonicLarge.exe masquerading under a different original filename) from the Temp directory, beaconed to a malicious external IP, then systematically disabled Windows Defender through a scripted sequence of WMIC MSFT_MpPreference commands targeting four specific threat IDs. A second persistence payload disguised as EasyCalc loaded NW.js framework DLLs, indicating a Chromium-based embedded runtime commonly used to disguise malicious applications as legitimate desktop tools. The attacker then killed and deleted evidence binaries to cover tracks. Sysmon telemetry preserved the full activity chain despite the endpoint product being disabled, demonstrating the value of independent logging infrastructure that operates separately from endpoint security products.
+
+# What I Would Flag in a Real SOC
+- NirSoft browser password recovery tools executing from Temp directories under a Finance user account are a high-confidence credential harvesting indicator and should trigger an immediate alert and account password rotation
+- Executable binaries with a OriginalFileName field that differs from the on-disk filename are renamed to evade detection, this mismatch should be a detection rule in any SIEM processing Sysmon EventCode 1 data
+- Outbound network connections from Temp-staged executables to external IPs are a strong C2 beaconing indicator, executables running from Temp should never be permitted to make outbound connections in a hardened environment
+- Registry modifications to HKLM\SOFTWARE\Policies\Microsoft\Windows Defender by a non-system process should trigger a critical alert, this key controls Defender's core protection policies and should be monitored by file integrity and registry monitoring tools
+- A scripted sequence of WMIC MSFT_MpPreference exclusion commands targeting multiple threat IDs is a clear defence evasion TTP (MITRE T1562.001) and should be detected by PowerShell script block logging and correlated with Defender configuration change events
+- The fact that the attacker could disable endpoint protection and operate undetected confirms the customer lacked independent log collection from Sysmon or equivalent, all endpoints must forward telemetry to a SIEM that operates independently of the local endpoint security product
