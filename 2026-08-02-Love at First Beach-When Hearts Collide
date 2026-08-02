@@ -1,0 +1,90 @@
+# Room Name - TryHackMe: When Hearts Collide
+Date: 02 August 2026
+Difficulty: Easy
+Category: Cryptography / MD5 Collision / Hash Exploitation
+
+# Scenario
+Matchmaker is a hash-powered experience that pairs you with your ideal dog by comparing MD5 fingerprints. Upload a photo, let the hash chemistry do its thing, and watch the site reveal whether your vibe matches one of the curated pups. The algorithm is completely transparent — which turned out to be the vulnerability itself.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- md5sum
+- fastcoll (clone-fastcoll, MD5 collision generator)
+- gcc / g++ / build-essential / libboost
+
+# What I Did
+
+Step 1 — Reconnaissance and identify the matching mechanism
+- Fetched the homepage and identified an upload form (POST /upload) and a "Browse a random match" link pointing to a UUID-based view route:
+```
+curl -s http://10.49.174.213/
+```
+- Found the sample match link: /view/00795a8b-fb58-47c0-91be-af068ddc71b4
+
+Step 2 — Retrieve the reference dog image and its MD5 hash
+- Fetched the view page to extract the actual image path:
+```
+curl -s http://10.49.174.213/view/00795a8b-fb58-47c0-91be-af068ddc71b4
+```
+- Found the image at: /static/uploads/00795a8b-fb58-47c0-91be-af068ddc71b4.jpg
+- Downloaded the image and computed its MD5 hash:
+```
+curl -s http://10.49.174.213/static/uploads/00795a8b-fb58-47c0-91be-af068ddc71b4.jpg -o dog_sample.jpg
+md5sum dog_sample.jpg
+```
+- MD5 hash: a15ec1ecaef0eac2d8a9be79d1d51296
+- Confirmed the app used MD5 hash comparison as the sole matching mechanism.
+
+Step 3 — Build the MD5 collision tool
+- Installed build dependencies and cloned the fastcoll MD5 collision generator:
+```
+apt-get install -y build-essential libboost-all-dev git
+git clone https://github.com/upbit/clone-fastcoll.git
+cd clone-fastcoll
+g++ -O3 *.cpp -lboost_filesystem -lboost_program_options -lboost_system -o fastcoll
+```
+
+Step 4 — Generate an MD5 collision against the reference image
+- Used fastcoll to generate two different files with an identical MD5 hash based on the downloaded dog image:
+```
+./fastcoll dog_sample.jpg
+md5sum md5_data1 md5_data2
+```
+- Both files produced the same MD5 hash: 5da2d991a4e1e5fdd574708d4f6583d1
+- Confirmed a genuine MD5 collision — two distinct files, identical hash.
+
+Step 5 — Upload both colliding files to trigger the match
+- Renamed the collision outputs and uploaded them sequentially:
+```
+cp md5_data1 collision1.jpg
+cp md5_data2 collision2.jpg
+
+curl -X POST http://10.49.174.213/upload -F "file=@collision1.jpg"
+curl -X POST http://10.49.174.213/upload -F "file=@collision2.jpg"
+```
+- The first upload had no match (nothing in the database to compare against yet).
+- The second upload triggered a match because its MD5 hash was identical to the first file already stored in the database.
+
+Step 6 — Retrieve the flag
+- Accessed the upload success page for the second file and confirmed data-match="true".
+- Retrieved the flag from the match result page.
+
+# What I Found
+- Matching mechanism: MD5 hash comparison of uploaded file against existing database entries
+- Reference image MD5: a15ec1ecaef0eac2d8a9be79d1d51296
+- Collision tool used: fastcoll (based on Wang/Stevens MD5 collision techniques)
+- Collision hash (both files): 5da2d991a4e1e5fdd574708d4f6583d1
+- Match triggered: collision2.jpg matched collision1.jpg in the database
+- Flag: THM{hash_puppies_4_all}
+
+# Key Learning
+MD5 has been cryptographically broken since 2004 and practical collision generation tools such as fastcoll can produce two different files with an identical MD5 hash in seconds on consumer hardware. Using MD5 for identity, integrity, or matching purposes is therefore not a weakness — it is a fundamental design failure. The application's marketing claim that the algorithm was "completely transparent" was accurate and ironic: the transparency of the mechanism made it immediately obvious to any security-aware user exactly how to exploit it. Cryptographic hash functions used for integrity or identity verification must be collision-resistant, meaning SHA-256 or stronger, and MD5 must never be used in any security-sensitive context.
+
+# What I Would Flag in a Real SOC
+- Any application using MD5 for file identity, deduplication, or matching is vulnerable to hash collision attacks and should be flagged for immediate migration to a collision-resistant algorithm such as SHA-256 or SHA-3
+- File upload endpoints that accept arbitrary file types without extension or content-type validation combined with hash-based matching logic create an exploitable surface where semantically meaningless files can trigger application logic intended for legitimate content
+- The fastcoll tool and similar MD5 collision generators are publicly available and require no specialist knowledge to operate, the barrier to exploiting MD5-based matching is effectively zero for any attacker with basic Linux skills
+- Database deduplication or matching systems that use MD5 as a primary key or comparison field are vulnerable to deliberate hash collisions that can corrupt or manipulate stored records, all such systems must be audited and migrated
+- Publicly documented cryptographic weaknesses in production systems represent a compliance failure under standards such as PCI-DSS and NIST guidelines which explicitly prohibit MD5 for security purposes, identification of MD5 usage should trigger a compliance review alongside the technical remediation
