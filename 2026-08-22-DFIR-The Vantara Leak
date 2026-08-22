@@ -1,0 +1,122 @@
+# Room Name - TryHackMe: The Vantara Leak
+Date: 22 August 2026
+Difficulty: Medium
+Category: DFIR / Windows Forensics / Incident Response
+
+# Scenario
+Vantara Financial Group's internal SOC escalated a series of alerts involving anomalous authentication activity against a finance department file server, followed by large outbound transfers to an unfamiliar external host. TSS was engaged to scope the breach, determine impact, and remove the adversary. The investigation focused on a compromised finance workstation, with a known legitimate contractor also using the system, requiring careful separation of contractor activity from attacker activity throughout the analysis.
+
+# Tools Used
+- TryHackMe Forensic Workstation (split-screen)
+- KAPE (triage collection)
+- PECmd (Prefetch parsing)
+- AmcacheParser (Amcache hive parsing)
+- MFTECmd (MFT parsing)
+- Registry Explorer (SAM hive review)
+- Notepad++ (CSV and log review)
+- Windows command line utilities (dir, type, findstr)
+
+# What I Did
+
+**Step 1 — Review the KAPE triage collection**
+- Extracted Vantara-Artefacts.zip and reviewed the KAPE collection log to confirm scope.
+- Confirmed 777 files collected (66 deduplicated) from the finance workstation, covering Prefetch, Amcache, registry hives, MFT, scheduled tasks, and user profile artefacts.
+
+**Step 2 — Parse Prefetch artefacts**
+- Located PECmd in the DFIR Tools directory and ran it against the collected Prefetch folder:
+```
+PECmd.exe -d "C:\Artefacts\TSS-CASE-001\C\Windows\prefetch" --csv "C:\Output" --csvf prefetch.csv
+```
+- Searched the output CSV for references to the Downloads folder to identify initial execution on the incident date (2026-06-05):
+```
+Search "DOWNLOADS" in prefetch.csv
+```
+- Found a single hit referencing an executable launched from the contractor's Downloads folder on the incident date.
+
+**Step 3 — Confirm execution path and hash via Amcache**
+- Ran AmcacheParser against the collected Amcache hive:
+```
+AmcacheParser.exe -f "C:\Artefacts\TSS-CASE-001\C\Windows\AppCompat\Programs\Amcache.hve" --csv "C:\Output"
+```
+- Searched Amcache unassociated file entries for the Downloads path:
+```
+findstr /i "downloads" "C:\Output\..._Amcache_UnassociatedFileEntries.csv"
+```
+- Confirmed the executable path, first seen timestamp, and SHA1 hash for handoff to malware analysis.
+
+**Step 4 — Identify the next stage payload delivery method**
+- Searched Amcache entries around the incident timeframe for additional executables:
+```
+findstr /i "2026-06-05 06:0" "C:\Output\..._Amcache_UnassociatedFileEntries.csv"
+```
+- Identified a native Windows binary used to deliver the next stage payload shortly after initial execution.
+- Identified the dropped payload by name, confirming it was masquerading as a legitimate Windows process.
+
+**Step 5 — Locate the persistence scheduled task**
+- Navigated to the collected scheduled tasks directory:
+```
+dir "C:\Artefacts\TSS-CASE-001\C\Windows\System32\Tasks\"
+```
+- Found a task with a name mimicking a legitimate Microsoft service.
+- Read the task XML to extract author, creation timestamp, trigger, and executable path:
+```
+type "C:\Artefacts\TSS-CASE-001\C\Windows\System32\Tasks\[task name]"
+```
+- Confirmed the task ran at logon and pointed to an executable staged in a Temp directory under the contractor's profile.
+
+**Step 6 — Review PowerShell console history for reconnaissance and lateral movement**
+- Read the contractor's PowerShell PSReadLine history file:
+```
+type "C:\Artefacts\TSS-CASE-001\C\Users\daniel.avery\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
+```
+- Found a sequence of commands including domain trust enumeration (nltest) and a lateral movement attempt using a domain service account against a finance file server (net use).
+- Identified the user discovery command run by the attacker via PowerShell.
+
+**Step 7 — Identify the unauthorised local account**
+- Opened the collected SAM hive in Registry Explorer.
+- Navigated to SAM\Domains\Account\Users\Names and reviewed all local accounts.
+- Identified a local account not provisioned by IT, with a last write timestamp matching the intrusion window.
+
+**Step 8 — Identify the accessed financial document**
+- Reviewed Jump List and recent file artefacts for files accessed during the attack window.
+- Identified a financial document opened on the workstation during the incident date.
+
+**Step 9 — Locate the staged compressed archive via MFT**
+- Parsed the MFT to locate files created during the incident window:
+```
+MFTECmd.exe -f "C:\Artefacts\TSS-CASE-001\C\$MFT" --csv "C:\Output" --csvf mft.csv
+```
+- Found a compressed archive staged in a Temp directory, with creation timestamp consistent with a data collection and staging phase.
+- Confirmed the file size in bytes.
+
+**Step 10 — Determine total execution count of user discovery command**
+- Searched Prefetch for the WHOAMI.EXE entry to confirm total cumulative run count:
+```
+Search "WHOAMI.EXE" in prefetch.csv
+```
+- Found run count of 11, consistent with 10 contractor executions and 1 attacker execution via PowerShell, as corroborated by the PSReadLine history.
+
+# What I Found
+- Executable launched from Downloads on incident date: `[redacted]`
+- SHA1 hash of the initial executable: `[redacted]`
+- Native Windows binary used to deliver the next stage payload: `[redacted]`
+- Legitimate Windows process being impersonated: `[redacted]`
+- Scheduled task name: `[redacted]`
+- Full executable path in the scheduled task: `[redacted]`
+- Tool used for domain trust enumeration: `[redacted]`
+- Domain account used in lateral movement attempt: `[redacted]`
+- Unauthorised local account: `[redacted]`
+- Financial document accessed during the attack: `[redacted]`
+- Staged compressed archive size (bytes): `[redacted]`
+- User discovery command and total execution count: `[redacted]`
+
+# Key Learning
+Prefetch alone can be misleading when determining where a process was launched from, since it lists files referenced during execution rather than only the launch path. Amcache is a stronger source for confirming original file paths and SHA1 hashes, particularly for binaries that may have been deleted after execution. Distinguishing legitimate contractor activity from attacker activity required correlating multiple artefact sources: PowerShell console history confirmed the attacker's command sequence, Prefetch run counts revealed total execution volume, and scheduled task metadata tied persistence back to a specific account and timestamp. A binary masquerading as a legitimate Windows process with a near-identical name is a strong indicator of defence evasion and should be flagged immediately when identified in non-standard locations.
+
+# What I Would Flag in a Real SOC
+- The unauthorised local account created during the intrusion window should trigger immediate isolation of the workstation and a password reset for all accounts with access to the affected system
+- The domain service account credentials used in the lateral movement attempt must be treated as fully compromised, requiring immediate rotation and an audit of all systems that account has authenticated against
+- Scheduled tasks created under contractor accounts pointing to executables in Temp directories are a high-confidence persistence indicator and should be detected by endpoint monitoring of task creation events (EventID 4698)
+- The native Windows binary identified as the payload delivery mechanism should be monitored for anomalous child process creation across all endpoints in the environment
+- The staged compressed archive in the Temp directory and the accessed financial document together indicate successful data collection and potential exfiltration, data classification and DLP review should be initiated immediately to determine regulatory notification obligations
+- Prefetch and Amcache should be collected as part of every incident response triage, as they provide execution evidence that persists after binaries are deleted and is not dependent on EDR coverage being active at the time of the intrusion
