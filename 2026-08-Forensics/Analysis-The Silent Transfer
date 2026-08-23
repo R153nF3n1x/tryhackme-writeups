@@ -1,0 +1,96 @@
+# Room Name - TryHackMe: The Silent Transfer
+Date: 23 August 2026
+Difficulty: Medium
+Category: Threat Hunting / Network Forensics / Traffic Analysis
+
+# Scenario
+At 22:41 on 14 November, Helios Software Group's security team escalated suspicious encrypted outbound traffic from a developer workstation. A Snort alert identified possible command-and-control traffic, and the firewall showed follow-on connections inconsistent with normal development activity. TSS was engaged to reconstruct the full network activity, determine whether the host was used for internal movement, and confirm whether data left the network.
+
+# Tools Used
+- TryHackMe Forensic Workstation (split-screen)
+- Terminal (bash)
+- Wireshark
+- TShark
+- Zeek (zeek-cut)
+- Zui
+- grep / cat / base64
+
+# What I Did
+
+**Step 1 — Review Snort alerts around 03:47 UTC**
+- Searched Snort alert log for the C2 detection timestamp:
+```
+grep -i "03:47" /home/ubuntu/capstone/snort_alerts.log
+```
+- Found a single ET TROJAN alert for Cobalt Strike Beacon CnC Activity at 03:47:22 UTC, identifying the internal source IP and external C2 destination.
+
+**Step 2 — Correlate with Zeek connection logs**
+- Queried Zeek conn.log for connections around the alert window:
+```
+cat /home/ubuntu/capstone/zeek_logs/conn.log | zeek-cut ts id.orig_h id.resp_h id.resp_p proto service duration | grep -i "03:4"
+```
+- Confirmed the compromised workstation was making repeated short-duration connections to the C2 server on port 443, consistent with beaconing behaviour.
+
+**Step 3 — Work backwards to identify the initial dropper delivery**
+- Reviewed Zeek HTTP and DNS logs to identify connections predating the first C2 beacon.
+- Found a suspicious domain resolution and file download prior to C2 establishment.
+- Extracted the SHA256 hash of the downloaded file from Zeek files.log.
+
+**Step 4 — Identify the first C2 connection source port**
+- Queried conn.log for the earliest connection from the compromised workstation to the C2 server.
+- Extracted the source port used for the first connection.
+
+**Step 5 — Extract the JA4 TLS fingerprint**
+- Reviewed Zeek TLS log (tls.log) for connections between the compromised workstation and the C2 server.
+- Extracted the JA4 fingerprint identifying the C2 client's TLS behaviour.
+
+**Step 6 — Enumerate SMB discovery activity**
+- Reviewed Zeek conn.log and the FortiGate firewall log for SMB (port 445) connections originating from the compromised workstation after C2 was established.
+- Counted unique internal destination IP addresses contacted during the SMB scanning phase.
+
+**Step 7 — Identify the RDP lateral movement destination**
+- Reviewed FortiGate traffic log for RDP (port 3389) connections originating from the compromised workstation following the SMB discovery activity.
+- Identified the internal server the attacker connected to via RDP.
+
+**Step 8 — Identify the domain resolved before the large outbound transfer**
+- Reviewed Zeek DNS log for queries originating from the RDP destination server.
+- Identified the domain resolved immediately before the large outbound data transfer event in the firewall logs.
+
+**Step 9 — Extract the exfiltrated archive hash**
+- Reviewed Zeek files.log for large file transfers from the internal server to the external endpoint.
+- Extracted the SHA256 hash of the archive transferred outbound.
+
+**Step 10 — Decode the attacker's C2 command**
+- Inspected application-layer C2 traffic in the PCAP using TShark and Wireshark.
+- Found JSON-formatted C2 response containing a hex-encoded payload:
+```
+7b22737461747573223a226f6b222c22636d64223a226432687659573170222c22696e74657276616c223a36307d
+```
+- Decoded the hex to reveal a JSON object with a Base64-encoded cmd field.
+- Decoded the Base64 value to recover the attacker's command:
+```
+echo "d2hvYW1p" | base64 -d
+```
+
+# What I Found
+- Internal IP originating C2 traffic: `[redacted]`
+- Domain used to deliver the initial dropper: `[redacted]`
+- SHA256 hash of the downloaded dropper: `[redacted]`
+- Source port of first C2 connection: `[redacted]`
+- JA4 fingerprint of C2 client: `[redacted]`
+- Unique internal IPs contacted during SMB discovery: `[redacted]`
+- RDP lateral movement destination IP: `[redacted]`
+- Domain resolved before large outbound transfer: `[redacted]`
+- SHA256 hash of exfiltrated archive: `[redacted]`
+- Command issued via C2 channel: `[redacted]`
+
+# Key Learning
+Network-based threat hunting requires correlating evidence across multiple log sources rather than relying on any single alert. The Snort alert provided the starting timestamp and the internal IP, but the full kill chain — dropper delivery, C2 beaconing, SMB discovery, RDP lateral movement, and data exfiltration — was only reconstructable by pivoting between Zeek HTTP, DNS, TLS, conn, and files logs alongside the FortiGate firewall records. JA4 fingerprinting of TLS connections provides a stable identifier for C2 client behaviour that persists even when the server-side infrastructure rotates. C2 commands encoded as hex then JSON then Base64 are a deliberate multi-layer obfuscation approach designed to evade both signature-based detection and casual inspection of application-layer traffic.
+
+# What I Would Flag in a Real SOC
+- Repeated short-duration outbound TLS connections from a developer workstation to an external IP on port 443 at regular intervals are a high-confidence beaconing indicator and should trigger automated isolation pending review
+- A file downloaded from a domain mimicking a legitimate software distribution service (microsoftservice-style naming) should be sandboxed before execution, particularly when the download occurs outside business hours
+- SMB connections from a single workstation to a large number of unique internal IPs in a short window are a textbook lateral movement discovery pattern and should alert immediately via network detection rules
+- RDP from a developer workstation to an internal server not in its normal communication baseline is an anomalous lateral movement indicator requiring investigation regardless of whether credentials are valid
+- Outbound transfers of large archives from an internal server to an external endpoint immediately following an unusual DNS resolution should be treated as a confirmed exfiltration event and trigger network-level blocking and data classification review
+- C2 commands encoded across multiple layers (hex, JSON, Base64) are designed to evade shallow content inspection, network security monitoring must inspect and decode application-layer payloads rather than relying solely on connection metadata
