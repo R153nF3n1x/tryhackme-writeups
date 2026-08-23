@@ -1,0 +1,121 @@
+# Room Name - TryHackMe: DetectMare
+Date: 23 August 2026
+Difficulty: Medium
+Category: Detection Engineering / Sigma / Splunk / Detection-as-Code
+
+# Scenario
+TSS was engaged by the Meridian Defense Research Institute following a full APT21 kill chain that ran undetected from initial access through credential harvesting, lateral movement, and data staging. The attacker gained initial access via a spearphishing attachment, established a foothold using a NetTraveler-style loader, mapped the domain, dumped credentials from memory, moved laterally onto classified file servers using stolen hashes, and staged classified weapons-program design files into encrypted archives for exfiltration. Not a single alert fired across the entire estate. The task was to review five CSIRT-submitted Sigma rule pull requests in the Detection-as-Code pipeline, identify why each rule failed, and tune them to achieve 100% true positive detection with zero false positives.
+
+# Tools Used
+- TryHackMe Attack Box
+- Splunk (index=dac_lab)
+- Detection-as-Code (DaC) pipeline interface
+- Sigma rule editor
+- Browser
+
+# What I Did
+
+**Step 1 — Read the incident report**
+- Reviewed the full APT21 attack chain report stored in the /threat-intel folder of the DaC application.
+- Mapped the kill chain: spearphishing attachment > macro execution > loader staging > domain enumeration > LSASS credential dump > pass-the-hash lateral movement > CAD file archiving for exfiltration.
+- Reviewed the environment-routines.md file to understand legitimate tools and processes that would need to be filtered from each detection rule.
+
+**PR#1 — Office LOLBin Execution (Initial Access)**
+
+- Reviewed the original broken rule and identified it was too narrow, missing the legitimate finance automation process that also spawned cmd.exe from Office applications.
+- Queried Splunk to enumerate all cmd.exe processes with Office parent images:
+```
+index=dac_lab CommandLine="*.bat*" ParentImage="*WINWORD.EXE*" OR ParentImage="*EXCEL.EXE*" OR ParentImage="*POWERPNT.EXE*"
+```
+- Found 4 legitimate events: monthend_report.bat launched from EXCEL.EXE against MonthEnd_Template.xlsm across multiple dates and users.
+- Added a filter for the known-good finance automation batch file while retaining detection of all other Office-spawned cmd.exe activity.
+- Confirmed the doc file opened by the infected user from the certutil event's ParentCommandLine field.
+- Flag: `[redacted]`
+
+**PR#2 — Signed Binary Proxy Execution (Foothold)**
+
+- Reviewed the original rule targeting rundll32.exe and regsvr32.exe and identified it was generating false positives.
+- Queried Splunk for all rundll32 and regsvr32 events:
+```
+index=dac_lab Image="*rundll32.exe*" OR Image="*regsvr32.exe*"
+```
+- Found 18 events including: a legitimate deployment tool invoking rundll32 to install CAD viewer packages, the real attack using regsvr32 to load a remote scriptlet from an external IP via mshta.exe, and a CAD license checker (LicenseCheck_CAD.dat) invoked by sldworks.exe.
+- Identified the internal tool causing false positives by matching the answer format (14 chars + .exe): `[redacted]`
+- Added filters for the legitimate deployment tool's ParentImage and the CAD license checker's CommandLine pattern.
+- Flag: `[redacted]`
+
+**PR#3 — LSASS Memory Dump (Credential Access)**
+
+- Reviewed the original rule targeting LSASS access and identified it was generating false positives from legitimate security and system tools.
+- Queried Splunk for all events accessing lsass.exe:
+```
+index=dac_lab TargetImage="*lsass.exe*"
+```
+- Found 16 events from taskmgr.exe, WerFault.exe, the environment's PAM vault agent, and EDR sensor — all legitimate with known GrantedAccess values.
+- Identified the real attack: rundll32.exe accessing lsass with GrantedAccess 0x1fffff via comsvcs.dll (MiniDump technique), with CallTrace showing UNKNOWN region indicating shellcode injection.
+- Identified the username the attacker used to execute the LSASS dump from the SourceUser field: `[redacted]`
+- Added filters for all known-good tools by SourceImage while alerting on 0x1fffff access from unexpected processes.
+- Flag: `[redacted]`
+
+**PR#4 — Pass-the-Hash Lateral Movement**
+
+- Reviewed the original rule targeting NTLM logon type 3 with KeyLength 0 and identified it was too broad.
+- Queried Splunk for authentication events across classified file servers.
+- Found 8 events including legitimate cluster service authentication (svc_cluster between FS-CLASSIFIED01 and FS-CLASSIFIED02) and legacy MES integration (svc_mes to MES-LEGACY01).
+- Identified the real pass-the-hash event: m.okafor authenticating to FS-CLASSIFIED01 via NTLM with KeyLength 0 at the following timestamp: `[redacted]`
+- Added filters for known service account lateral movement patterns while alerting on user account NTLM logons with KeyLength 0 to classified servers.
+- Confirmed service creation persistence event: WinHelpSvc installed at C:\ProgramData\Intel\nt.dat on FS-CLASSIFIED01 shortly after the pass-the-hash logon.
+- Flag: `[redacted]`
+
+**PR#5 — Weapons Program Data Staged and Archived**
+
+- Reviewed the original rule targeting 7-Zip and RAR archiving of CAD files and identified it was generating false positives from both SOLIDWORKS auto-backup (sldworks.exe parent) and the nightly backup routine (researchbackup.exe parent).
+- Queried Splunk for all archiving events referencing CAD file extensions.
+- Found 11 events: 4 legitimate SOLIDWORKS auto-backups (sldworks.exe parent, known CAD file names), 5 legitimate nightly backup jobs (researchbackup.exe parent, destination D:\Backups\nightly), and 2 real attack events including a renamed rar.exe from AppData\Local\Temp with a password flag and a public staging path.
+- Identified the folder an attacker should use to blend with the legitimate backup routine: `[redacted]`
+- Built the final rule keying on archiver command-line syntax (a -) and CAD extensions rather than binary name to catch renamed tools, with ParentImage filters for both trusted backup processes:
+```yaml
+detection:
+  selection_archive_syntax:
+    CommandLine|re: '\ba\s+-'
+    CommandLine|contains:
+      - '.sldprt'
+      - '.catpart'
+      - '.dwg'
+  selection_powershell_archive:
+    Image|endswith: '\powershell.exe'
+    CommandLine|contains: 'Compress-Archive'
+    CommandLine|contains:
+      - '.sldprt'
+      - '.catpart'
+      - '.dwg'
+  filter_sw_autobackup:
+    ParentImage|endswith: '\sldworks.exe'
+  filter_backup_agent:
+    ParentImage|endswith: '\researchbackup.exe'
+  condition: (selection_archive_syntax or selection_powershell_archive) and not (filter_sw_autobackup or filter_backup_agent)
+```
+- Flag: `[redacted]`
+
+# What I Found
+- Doc file opened by the infected user: `[redacted]`
+- PR#1 flag: `[redacted]`
+- Internal tool causing false positives in PR#2: `[redacted]`
+- PR#2 flag: `[redacted]`
+- Username used for the LSASS dump: `[redacted]`
+- PR#3 flag: `[redacted]`
+- Pass-the-hash authentication timestamp: `[redacted]`
+- PR#4 flag: `[redacted]`
+- Folder for blending with legitimate backup routine: `[redacted]`
+- PR#5 flag: `[redacted]`
+
+# Key Learning
+Detection rules written without validating against real environment logs will almost always generate false positives in production, because every environment has legitimate processes that partially match attacker behaviour. Environment-specific context (backup agents, deployment tools, CAD auto-save routines) must be understood before writing exclusion filters, and those filters must be as specific as possible to avoid creating bypass opportunities. Keying on command-line syntax patterns rather than binary names is more resilient against renamed-tool evasion. Each PR in this room required a different failure mode to be diagnosed: wrong field names, missing legitimate process filters, insufficient GrantedAccess scoping, service account exclusion gaps, and binary name dependence — reinforcing that detection engineering is an iterative, evidence-driven discipline rather than a one-shot rule-writing exercise.
+
+# What I Would Flag in a Real SOC
+- A Sigma rule that fires zero alerts during a confirmed full kill chain is a detection coverage failure that should trigger a mandatory post-incident rule review across all stages of the MITRE ATT&CK framework
+- LSASS access with GrantedAccess 0x1fffff from any process other than known-good security tooling should be treated as a critical credential theft indicator requiring immediate endpoint isolation
+- NTLM logons with KeyLength 0 from user accounts (as opposed to service accounts) to sensitive servers are a high-confidence pass-the-hash indicator, Kerberos should be enforced wherever possible to eliminate this attack vector
+- Archiving tools executing from AppData\Local\Temp with password flags against network shares containing classified file extensions should trigger immediate data loss prevention review regardless of whether the binary name is recognised
+- A service created within minutes of a pass-the-hash logon on a file server is a persistence indicator that should be correlated automatically in the SIEM and escalated without waiting for analyst review
+- Detection-as-Code pipelines with red team bypass testing built into the CI/CD process are essential for catching rules that pass static validation but fail against real adversary tradecraft variations
