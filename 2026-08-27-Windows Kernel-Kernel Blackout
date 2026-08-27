@@ -1,0 +1,79 @@
+# Room Name - TryHackMe: Kernel Blackout
+Date: 27 August 2026
+Difficulty: Hard
+Category: Malware Development / Kernel Rootkit / Windows Internals / DKOM
+
+# Scenario
+Blue pill: stay in user mode, trust the documented APIs, and never question what lies beneath. Red pill: drop into kernel mode and see how deep the rabbit hole goes. The challenge involved developing a Windows kernel-mode rootkit using Direct Kernel Object Manipulation (DKOM) to hide a running process from user-space enumeration, building it as a signed driver using the Windows Driver Kit, and uploading the compiled payload to a target machine via a web interface.
+
+# Tools Used
+- TryHackMe MalwareDev machine (RDP)
+- TryHackMe Target machine (http://10.200.150.10)
+- Microsoft Visual Studio 2022 Build Tools (cl.exe)
+- Windows Driver Kit (WDK) 10.0.19041.0
+- Windows Debugger (WinDbg) — live kernel debugging
+- RDP client
+
+# What I Did
+
+**Step 1 — Connect to MalwareDev via RDP**
+- Connected to the MalwareDev development machine using the provided credentials.
+- Located the x64 Visual Studio command prompt for kernel-mode compilation.
+
+**Step 2 — Inspect the target _EPROCESS structure via WinDbg**
+- The challenge page provided a live WinDbg console connected to the target kernel.
+- Ran dt nt!_EPROCESS to enumerate the EPROCESS structure offsets for the target kernel version (Windows 10 17763):
+```
+dt nt!_eprocess
+```
+- Confirmed the key offsets required for DKOM:
+  - ActiveProcessLinks: 0x2e8
+  - ImageFileName: 0x450
+
+**Step 3 — Write the kernel rootkit source**
+- Wrote a minimal Windows kernel driver (rootflag.c) implementing DKOM process hiding.
+- The driver walked the ActiveProcessLinks doubly-linked list in kernel memory, compared the ImageFileName field of each EPROCESS entry against the target process name (implant.exe), and unlinked the matching entry from the list to hide it from user-space process enumeration tools.
+- Key technique: unlinking an EPROCESS from ActiveProcessLinks removes it from the list that PsActiveProcessHead and NtQuerySystemInformation iterate over, making the process invisible to Task Manager, Process Explorer, and all user-space APIs that enumerate running processes.
+
+**Step 4 — Compile the kernel driver**
+- Compiled the rootkit using the MSVC compiler with kernel-mode flags from the x64 Visual Studio Build Tools prompt:
+```
+cl /W4 /D_AMD64_ /D_WIN64 /D_KERNEL_MODE C:\rootflag.c
+  /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0\km"
+  /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.19041.0\shared"
+  /link /driver /entry:DriverEntry /subsystem:native /out:C:\hide.sys
+  "C:\Program Files (x86)\Windows Kits\10\Lib\10.0.19041.0\km\x64\ntoskrnl.lib"
+```
+- Compilation succeeded with no errors or warnings.
+- Confirmed output: C:\hide.sys (3,584 bytes).
+
+**Step 5 — Upload and deploy the driver to the target**
+- Navigated to http://10.200.150.10 in the browser on MalwareDev.
+- Observed the process monitor page showing implant.exe (PID 2332) visible and flagged as suspicious.
+- Used the DRIVER_PAYLOAD upload form on the page to submit hide.sys.
+- The web interface loaded the driver on the target machine.
+
+**Step 6 — Confirm process hiding and retrieve the flag**
+- Refreshed the process monitor view on the target page.
+- Confirmed implant.exe was no longer present in the process list.
+- The page displayed "YOU DID IT!" and revealed the flag.
+
+# What I Found
+- Target kernel version: Windows 10 17763 (rs5_release)
+- EPROCESS offset for ActiveProcessLinks: 0x2e8
+- EPROCESS offset for ImageFileName: 0x450
+- DKOM technique: ActiveProcessLinks unlink
+- Driver compiled to: C:\hide.sys (3,584 bytes)
+- Target process hidden: implant.exe (PID 2332)
+- Flag: `[redacted]`
+
+# Key Learning
+DKOM process hiding works by directly manipulating the kernel's doubly-linked EPROCESS list rather than hooking any API. Because user-space tools enumerate processes by walking the same ActiveProcessLinks list via NtQuerySystemInformation, a process unlinked from that list becomes completely invisible to all standard enumeration APIs without any API hooking or patching. The offsets required for DKOM are kernel-version-specific and must be confirmed against the target kernel before writing the driver, which is why reading them from WinDbg rather than hardcoding assumptions is critical. This technique is a foundational rootkit primitive that modern EDR products detect through cross-view comparison: comparing the kernel's ActiveProcessLinks list against other data sources such as thread object references, VAD trees, and handle tables that the rootkit did not also manipulate.
+
+# What I Would Flag in a Real SOC
+- Any unsigned or test-signed kernel driver loaded outside of a formal software deployment is a critical indicator of rootkit activity and should trigger immediate endpoint isolation
+- Process list discrepancies between different enumeration methods (PsActiveProcessHead vs thread-based enumeration vs handle table enumeration) are the primary detection signal for DKOM-based process hiding, cross-view comparison tools should be run as part of any suspicious host investigation
+- WinDbg kernel debugging sessions attached to a production machine indicate either a compromised system or a misconfigured development environment and should never be present on non-development endpoints
+- A web interface that accepts .sys file uploads and loads them as kernel drivers is an exceptionally dangerous capability and should not exist on any production or internet-facing system under any circumstances
+- Kernel-mode rootkits that survive reboot require a persistence mechanism such as a service registration or bootkit, investigating whether the driver was registered as a service (EventID 7045) is a necessary step in any DKOM detection response
+- Memory forensics tools such as Volatility with the pstree and psscan plugins can detect DKOM hiding by comparing the linked list against pool tag scanning, endpoint detection that relies solely on user-space API calls will be blind to this technique
