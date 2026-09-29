@@ -1,0 +1,76 @@
+# Invite Only - TryHackMe: Invite Only
+Date: 29 September 2026
+Difficulty: Easy
+Category: Threat intelligence
+
+# Scenario
+As a SOC analyst at the managed server provider TrySecureMe, I supported an L3 analyst during incident response. An L1 analyst had escalated two suspicious indicators, a flagged IP address and a SHA256 hash. My task was to investigate both with the TryDetectThis2.0 threat intelligence platform and turn the findings into usable threat intelligence.
+
+Flagged indicators:
+```
+IP:     101[.]99[.]76[.]120
+SHA256: 5d0509f68a9b7c415a726be75a078180e3f02e59866f193b0a99eee8e39c874f
+```
+
+# Tools Used
+- TryDetectThis2.0 threat intelligence search application
+- Check Point Research public threat report
+- Google for report lookup
+
+# What I Did
+- Started the lab machine and launched TryDetectThis2.0 from the desktop.
+- Searched the flagged SHA256 hash and reviewed the file report for name, type, detections and classification.
+- Checked the related information panel for contacted domains, contacted IPs, execution parents, bundled files and dropped files.
+- Pivoted on the second execution parent (installer.exe) to list the malicious files it dropped.
+- Searched the flagged IP and reviewed vendor detections, geolocation, ASN and the community section.
+- Used the community comment to identify the malware family and the original report.
+- Read the Check Point Research report to identify the cookie stealing tool, phishing technique and redirect platform.
+
+Hashes noted for pivoting:
+```
+Execution parent 1 (PowerShell, 361GJX7J):
+047c5eec0445746862710d20e50a5dd04510b7e625fa5c1f5d48ce078001c0de
+
+Execution parent 2 (installer.exe):
+fa102d4e3cfbe85f5189da70a52c1d266925f3efd122091cdc8fe0fc39033942
+
+Dropped file (AClient.exe):
+dd02c105809e4ca41a5489e585ba025eddb89a91703b73a566c9903e6406a08c
+```
+
+Malicious files dropped by installer.exe:
+```
+searchHost.exe  59feea18dc45bbe2b9798c9549983d79cc4788a9a0dafe2b0a930c60c7d2d6d7
+syshelpers.exe  5d0509f68a9b7c415a726be75a078180e3f02e59866f193b0a99eee8e39c874f
+nat1.vbs        87be7b4336367083ca9fcb1c7b9d0459659f2ffafde51f7236960f6032512409
+runsys.vbs      cb567a26c9aa7b023bd713756035530e56330ea87c3adbd26c83a5c8dc1cf9b9
+```
+
+# What I Found
+- The flagged hash belongs to syshelpers.exe, a Win32 EXE of 214 KB flagged by 51 of 72 vendors and classified as trojan.tedy/fxnp (trojan, downloader).
+- The file contacted trusted cloud services such as bitbucket.org and bbuseruploads.s3.amazonaws.com, which fits the campaign's use of legitimate platforms for payload delivery.
+- Execution parents in chronological order were 361GJX7J (PowerShell) and installer.exe.
+- The file dropped AClient.exe.
+- installer.exe dropped four malicious files: searchHost.exe, syshelpers.exe, nat1.vbs and runsys.vbs.
+- The flagged IP 101[.]99[.]76[.]120 was flagged by 12 of 94 vendors and is hosted in Malaysia under AS45839 (Shinjiru Technology Sdn Bhd).
+- A community comment tagged the IP as AsyncRAT C2, linking the related files to the AsyncRAT malware family.
+- The original report is "From Trust to Threat: Hijacked Discord Invites Used for Multi-Stage Malware Delivery" by Check Point Research.
+- Attackers hijacked expired and released Discord invite links through vanity link registration to redirect users to malicious servers.
+- The campaign used the ClickFix phishing technique with multi-stage loaders and time-based evasion to deliver AsyncRAT and a customised Skuld Stealer targeting crypto wallets.
+- ChromeKatz was used to bypass Chrome App Bound Encryption and steal cookies from newer Chromium browsers.
+
+# Key Learning
+- A single hash can open a full attack chain when you pivot on execution parents and dropped files.
+- Community comments on threat intelligence platforms often provide the context that detection counts alone do not, such as campaign attribution and MITRE ATT&CK mapping.
+- Traffic to trusted services like Bitbucket, GitHub, Pastebin and Discord should not be considered safe by default, as attackers use them to blend in.
+- Low vendor detection counts on an IP do not mean it is benign. 12 of 94 was enough to confirm C2 activity once context was added.
+- ClickFix relies on social engineering the user into running commands themselves, which bypasses many traditional delivery controls.
+
+# What I Would Flag in a Real SOC
+- Any outbound connection to 101[.]99[.]76[.]120 or other AsyncRAT C2 infrastructure, followed by host isolation and a full scope check.
+- Any host with the collected hashes (syshelpers.exe, searchHost.exe, AClient.exe, nat1.vbs, runsys.vbs, installer.exe) present or executed.
+- PowerShell spawning executables from user writable paths, especially following clipboard or run dialog activity linked to ClickFix lures.
+- wscript or cscript running VBS files from temp or AppData folders.
+- Downloads of executables from Bitbucket or S3 buckets by non developer endpoints.
+- Unexpected access to browser cookie stores or Chromium process memory, which could indicate ChromeKatz or similar stealers.
+- Users arriving at Discord invite links from external sources, used as a threat hunting pivot during the investigation.
