@@ -1,0 +1,55 @@
+# Room Name - TryHackMe: ItsyBitsy
+Date: 05 October 2026
+Difficulty: Medium
+Category: SOC Level 1, ELK, network log analysis
+
+# Scenario
+During routine SOC monitoring, an IDS alert flagged potential C2 communication from a machine belonging to Browne, a user in the HR department. A suspicious file containing a pattern in the format THM{...} was reportedly accessed. Due to limited resources, only a week of HTTP connection logs were collected and ingested into the connection_logs index in Kibana. The goal was to investigate the user's network activity, identify the C2 link, and recover the contents of the accessed file.
+
+# Tools Used
+- Kibana (Discover)
+- Elasticsearch with KQL
+- Web browser
+
+# What I Did
+- Logged into Kibana and opened the Discover tab with the connection_logs index selected.
+- Set the time range to 1 March 2022 to 31 March 2022 to scope the investigation to the relevant period.
+- Reviewed the source_ip field in the available fields panel. Two IPs were present, and one accounted for only 0.4% of events, making it the outlier worth investigating.
+- Filtered on the suspicious source IP to isolate its activity.
+
+```
+source_ip : 192.166.65.54
+```
+
+- Reviewed the two returned events and identified the user agent, destination IP, host, and URI.
+- Pivoted on the destination IP to confirm no other hosts in the logs had connected to it.
+
+```
+destination_ip : 104.23.99.190
+```
+
+- Combined the host and URI fields to build the full C2 URL and visited it in a browser to identify the file name and its contents.
+
+# What I Found
+- 1,482 events were recorded in the connection_logs index for March 2022.
+- The suspected user's machine was identified by the IP 192.166.65.54, which appeared in only 0.4% of events.
+- On 10 March 2022 at 11:23:11, the host made two HTTP requests (a HEAD followed by a GET) to 104.23.99.190 on port 80.
+- The user agent for both requests was bitsadmin, a legitimate Windows binary abused to download files.
+- The destination host was pastebin.com, a public file-sharing site used here as a C2 channel.
+- The full C2 URL was pastebin.com/yTg0Ah6a.
+- The file accessed on the paste was named secret.txt.
+- The file contained the secret code THM{SECRET__CODE}.
+
+# Key Learning
+- Outlier analysis on field value distributions in Kibana is a fast way to spot a single suspicious host among large volumes of normal traffic.
+- Living off the land binaries (LOLBins) such as bitsadmin are commonly abused because they are signed Microsoft tools and often bypass basic allowlisting.
+- Legitimate public services like Pastebin are frequently used for C2 and payload staging, since traffic to them blends in with normal browsing.
+- A HEAD request followed immediately by a GET to the same URI is a typical pattern of BITS jobs checking a resource before downloading it.
+- Pivoting from one indicator (source IP) to another (destination IP, host, URI) helps build a complete picture of an incident from limited log data.
+
+# What I Would Flag in a Real SOC
+- Any HTTP request with a bitsadmin user agent originating from a standard user workstation, especially in departments like HR where it has no business use.
+- Connections from internal hosts to paste sites such as pastebin.com, particularly raw content retrieval over plain HTTP.
+- Isolate the affected host 192.166.65.54 and escalate for endpoint investigation to check for downloaded payloads, BITS jobs, and persistence.
+- Block the C2 URL pastebin.com/yTg0Ah6a and consider restricting access to paste sites at the proxy level.
+- Hunt across the environment for other hosts using bitsadmin or contacting 104.23.99.190 to determine the scope of compromise.
