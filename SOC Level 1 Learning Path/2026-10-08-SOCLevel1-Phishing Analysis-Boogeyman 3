@@ -1,0 +1,77 @@
+# Room Name - TryHackMe: Boogeyman 3
+Date: 08 October 2026
+Difficulty: Hard
+Category: SOC, threat investigation, endpoint and network forensics
+
+# Scenario
+
+Quick Logistics LLC brought in a managed SOC provider after earlier Boogeyman intrusions, but the threat actor was still present and waiting. Using existing email access, the attacker targeted the CEO, Evan Hutchinson, with a phishing email carrying a malicious attachment. Evan opened the attachment, saw nothing happen, and reported it. The task was to reconstruct the full intrusion from Elastic Stack logs covering 29 to 30 August 2023, from initial execution through to ransomware staging.
+
+# Tools Used
+
+- Elastic Stack (Kibana) for log search and event correlation
+- Sysmon event logs for process creation and network connection
+- Windows PowerShell operational and engine logs
+- base64 decoding for encoded PowerShell commands
+- MITRE ATT&CK mapping for technique context
+
+# What I Did
+
+Started from the reported phishing email and the attachment found in the CEO downloads folder. The file was named ProjectFinancialSummary_Q3.pdf but was actually an ISO image that mounted as the D: drive, exposing an HTA file hidden behind a double extension.
+
+Traced the execution chain through Sysmon process creation events and pivoted on the file name, then on each child process by parent process id and parent image.
+
+```
+file.name: ProjectFinancialSummary_Q3.pdf
+```
+
+Followed the network connection event to find the C2 callback, then the UAC bypass, credential dumping, lateral movement, and the ransomware download.
+
+```
+process.name: "powershell.exe" and event.provider: "Microsoft-Windows-Sysmon" and event.code: "3"
+event.provider: "Microsoft-Windows-Sysmon" and "*review.dat*"
+"*github.com*" and NOT event.action: "Dns query (rule:DnsQuery)"
+"*mimikatz.exe*"
+host.hostname: "WKSTN-1327" and process.name: "mimikatz.exe"
+host.hostname: "DC01" and process.name: "mimikatz.exe"
+process.name: "powershell.exe" and "*ransomboogey.exe*"
+```
+
+Decoded the base64 encoded PowerShell used during lateral movement to confirm the plaintext credentials and the target host.
+
+# What I Found
+
+- Initial access was a phishing email to evan.hutchinson from allie.sierra@quicklogistics.org titled "Urgent Financial Matter Requiring Immediate Attention"
+- The attachment was an ISO masquerading as a PDF, which mounted as D: and contained ProjectFinancialSummary_Q3.pdf.hta
+- Stage 1 payload executed via mshta.exe with process id 6392
+- The payload copied a secondary file using "C:\Windows\System32\xcopy.exe" /s /i /e /h D:\review.dat C:\Users\EVAN~1.HUT\AppData\Local\Temp\review.dat
+- The implanted file was run with "C:\Windows\System32\rundll32.exe" D:\review.dat,DllRegisterServer
+- Persistence was set via a scheduled task named Review, triggering rundll32.exe against review.dat daily at 06:00
+- The implant initiated a C2 connection to 165.232.170.151:80 over HTTP
+- UAC bypass was performed using fodhelper.exe
+- Mimikatz was downloaded from https://github.com/gentilkiwi/mimikatz/releases/download/2.2.0-20220919/mimikatz_trunk.zip
+- Pass the hash yielded the credential pair itadmin:F84769D250EB95EB2D7D8B4A1C5613F2
+- The attacker read IT_Automation.ps1 from a remote share
+- Plaintext credentials recovered were QUICKLOGISTICS\allan.smith:Tr!ckyP@ssw0rd987
+- Lateral movement targeted the host WKSTN-1327 via Invoke-Command
+- On the second machine the malicious encoded command ran under parent process wsmprovhost.exe
+- Credentials dumped on WKSTN-1327 were administrator:00f80f2538dcb54e7adc715c0e7091ec
+- On DC01 the attacker ran a DCSync attack and, aside from administrator, dumped the backupda account
+- Ransomware was staged from http://ff.sillytechninja.io/ransomboogey.exe
+
+# Key Learning
+
+This chain is a clean example of why double extensions and container file types like ISO and HTA deserve scrutiny, since the ISO mounts cleanly as a drive and sidesteps mark of the web protections. The most useful analyst habit here was pivoting on parent and child process relationships rather than hunting single events in isolation, which is what made the mshta to xcopy to rundll32 to powershell flow readable as one story. Decoding the base64 PowerShell was essential, because the cleartext credentials and the lateral movement target were only visible after decoding. Living off the land binaries like mshta, rundll32, xcopy, and fodhelper did most of the work, so detection has to lean on behaviour and process lineage, not file reputation alone.
+
+# What I Would Flag in a Real SOC
+
+- An ISO or disk image from email that mounts and launches an HTA, which is almost never legitimate business activity
+- mshta.exe spawning xcopy.exe, rundll32.exe, and powershell.exe in quick succession from a user profile
+- rundll32.exe loading a .dat file via DllRegisterServer, a common masquerading technique
+- Scheduled task creation by a non administrative user process, especially one pointing at a temp directory
+- fodhelper.exe launched by an unusual parent, a known UAC bypass path
+- Outbound HTTP to a raw IP with no domain on a workstation
+- PowerShell downloading mimikatz from GitHub, and any process named mimikatz.exe executing
+- sekurlsa::pth and lsadump::dcsync command lines, which indicate pass the hash and domain credential theft
+- WinRM activity with wsmprovhost.exe as a parent tied to encoded PowerShell, signalling lateral movement
+- Download of an unknown executable to a user profile followed by remote execution, the clearest ransomware staging signal
