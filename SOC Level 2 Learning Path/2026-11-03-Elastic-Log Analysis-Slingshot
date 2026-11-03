@@ -1,0 +1,100 @@
+# Slingshot - TryHackMe: Slingshot
+
+Date: 03 November 2026
+Difficulty: Easy
+Category: Log analysis / Incident investigation (SOC L2 learning path)
+
+# Scenario
+
+Slingway Inc., a toy company, detected suspicious activity on its e-commerce web server and possible unauthorised changes to its database. The task was to use an Elastic Stack instance containing Apache logs to retrace the attacker's steps, build a timeline of events, and work out how the attacker moved from reconnaissance to administrative access and data theft. Suspicious activity was reported to have started on 26 July 2023.
+
+# Tools Used
+
+- Kibana Discover (apache_logs data view)
+- KQL (Kibana Query Language)
+- Kibana field statistics
+- CyberChef (Base64 decoding)
+
+# What I Did
+
+Set the time range from 26 July 2023 00:00:00 to now and reviewed the earliest events to identify the source of the activity. The transaction metadata showed a single external client generating the suspicious traffic.
+
+Filtered all events to the attacker's IP and used field statistics on the User-Agent header to profile the tools in use.
+
+```
+transaction.remote_address : "10.0.2.15" and request.headers.User-Agent : *Mozilla/5.0*
+```
+
+Counted the 404 responses generated during directory enumeration.
+
+```
+transaction.remote_address : "10.0.2.15" and response.status : 404
+```
+
+Narrowed down to successful requests made by the enumeration tool to find the directories that were actually discovered.
+
+```
+transaction.remote_address : "10.0.2.15" and response.status : 200 and request.headers.User-Agent : "Mozilla/5.0 (Gobuster)"
+```
+
+Reviewed successful requests to the admin login page to identify the brute-force activity and the credentials that worked. The Authorization header contained a Basic auth value, which I decoded in CyberChef.
+
+```
+transaction.remote_address : "10.0.2.15" and response.status : 200 and request.headers.User-Agent : * and http.url : "/admin-login.php"
+```
+
+```
+Basic YWRtaW46dGh4MTEzOA==  ->  admin:thx1138
+```
+
+Searched POST requests for uploaded content, excluding phpMyAdmin noise, to find the file uploaded through the admin panel.
+
+```
+transaction.remote_address : "10.0.2.15" and http.method : "POST" and message : *THM* and NOT http.url : "/phpmyadmin/ajax.php"
+```
+
+Tracked web shell usage to find the first command executed on the server.
+
+```
+transaction.remote_address : "10.0.2.15" and response.status : 200 and request.request_line : *webshell*
+```
+
+Reviewed request lines from the attacker for path traversal patterns, then followed the attacker into phpMyAdmin to identify the exported database and the data inserted through import.php.
+
+```
+transaction.remote_address : "10.0.2.15" and response.status : 200 and http.url : "/phpmyadmin/import.php"
+```
+
+# What I Found
+
+- Attacker IP address was 10.0.2.15, targeting the web server at 10.0.2.4 on port 80
+- First scanner used was the Nmap Scripting Engine (29 requests)
+- Directory enumeration was performed with Gobuster, User-Agent Mozilla/5.0 (Gobuster), making up 1,878 of 2,078 attacker requests
+- The attacker received 1,867 404 responses during enumeration
+- Enumeration exposed a /backups/ directory containing the flag a76637b62ea99acda12f5859313f539a
+- Enumeration also discovered the login page /admin-login.php
+- The admin panel was brute-forced with Hydra, User-Agent Mozilla/4.0 (Hydra)
+- Valid credentials recovered from the Basic auth header were admin:thx1138
+- A PHP web shell (easy-simple-php-webshell.php) was uploaded via /admin/upload.php, containing the flag THM{ecb012e53a58818cbd17a924769ec447}
+- The first command run through the web shell was whoami
+- Local file inclusion via /admin/settings.php?page= with path traversal was used to read /etc/phpmyadmin/config-db.php and obtain database credentials
+- The attacker accessed phpMyAdmin and exported the customer_credit_cards database, including the credit_cards table
+- The attacker inserted a record into the credit_cards table via import.php containing the flag c6aa3215a7d519eeb40a660f3b76e64c
+
+# Key Learning
+
+- Field statistics on the User-Agent header quickly reveal which tools an attacker used, since many offensive tools leave default signatures
+- Filtering by response code separates noisy enumeration attempts from the paths that actually exist
+- Basic auth headers in logs expose credentials in reversible Base64, so logging and transport security both matter
+- A single compromised admin account can chain into file upload, remote code execution, LFI, and full database access
+- Building the investigation as a timeline (recon, enumeration, brute force, upload, execution, LFI, data access) makes the scope and impact much easier to report
+
+# What I Would Flag in a Real SOC
+
+- High volume of 404 responses from a single source in a short window, indicating directory brute forcing
+- Known scanner and tool User-Agents such as Nmap, Gobuster, and Hydra hitting public-facing servers
+- Repeated authentication attempts against admin login pages followed by a successful login from the same IP
+- File uploads containing PHP code or functions like system() and requests to files in /uploads/ with a cmd parameter
+- Path traversal sequences such as ../../ in request parameters, especially targeting configuration files
+- phpMyAdmin access from unexpected sources, database exports, and data modification through import.php
+- Exposure of cardholder data, which would trigger PCI DSS incident response and breach notification obligations
