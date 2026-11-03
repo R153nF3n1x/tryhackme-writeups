@@ -1,0 +1,97 @@
+# Room Name - TryHackMe: Fixit
+Date: 26 October 2026
+Difficulty: Medium
+Category: SIEM / Splunk log parsing and analysis
+
+# Scenario
+As the final assessment for a SOC Level 2 role at MSSP Cybertees Ltd, I was given access to a Splunk instance receiving network logs from an unknown source. The data was arriving in an unusable state because Splunk could not determine event boundaries. The task was to fix the event breaking, extract custom fields, and analyze the network activity.
+
+# Tools Used
+- Splunk Enterprise (Fixit app)
+- Splunk configuration files (inputs.conf, props.conf, transforms.conf, fields.conf)
+- Regular expressions
+- Linux terminal
+
+# What I Did
+Located the Fixit app directory and reviewed the inputs.conf file to identify the script generating the logs and its sourcetype.
+
+```bash
+cd /opt/splunk/etc/apps/fixit
+cat default/inputs.conf
+```
+
+The raw events were being merged into large blocks. Every log line begins with `[Network-log]:`, so I used that as the event boundary in props.conf.
+
+```ini
+[network_logs]
+SHOULD_LINEMERGE = true
+BREAK_ONLY_BEFORE = ^\[Network-log\]:
+TRANSFORMS-network = network_custom_fields
+```
+
+Created a regex in transforms.conf to extract the six required fields from each event.
+
+```ini
+[network_custom_fields]
+REGEX = User named\s(\w+\s\w+)\sfrom\s(\w+)\sdepartment\saccessed\sthe\sresource\s(\w+\.\w+)(\/[\w\-\/\.]*)\sfrom\sthe\ssource\sIP\s(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\sand\scountry\s+([\w\s]+?)\s+at:
+FORMAT = Username::$1 Department::$2 Domain::$3 URI::$4 SourceIP::$5 Country::$6
+WRITE_META = true
+```
+
+Marked the fields as indexed in fields.conf and restarted Splunk to apply the changes.
+
+```ini
+[Username]
+INDEXED = true
+[Department]
+INDEXED = true
+[Domain]
+INDEXED = true
+[URI]
+INDEXED = true
+[SourceIP]
+INDEXED = true
+[Country]
+INDEXED = true
+```
+
+```bash
+/opt/splunk/bin/splunk restart
+```
+
+Once events were parsing correctly, I used SPL to analyze the data.
+
+```spl
+index=main | stats dc(Username) dc(URI) values(Domain)
+index=main | stats count by URI
+index=main URI="*/products*" | stats count by URI
+index=main | top limit=1 Username
+index=main | rex field=SourceIP "^(?<ip_range>\d+\.\d+)\." | stats count by ip_range
+index=main URI="*secret-document.pdf" | table _time Username Department SourceIP Country
+```
+
+# What I Found
+- The Fixit app is located at /opt/splunk/etc/apps/fixit
+- The log generating script is /opt/splunk/etc/apps/fixit/bin/network-logs
+- BREAK_ONLY_BEFORE with the pattern ^\[Network-log\]: fixed the event boundaries
+- The only domain in the log data is Cybertees.THM
+- 28 unique Username values were extracted
+- 12 unique URI values were extracted
+- 2 individual /products pages appeared in the data
+- /sales/ was the only URI without a file extension
+- Robert Wilson was the most active user on the network
+- Traffic originated from 3 private IP ranges (192.168.x.x, 10.x.x.x and 172.16.x.x)
+- Sarah Hall accessed secret-document.pdf on the client's server
+
+# Key Learning
+- Broken event boundaries make logs effectively useless, so ingestion health checks should come before any analysis
+- BREAK_ONLY_BEFORE is a simple and reliable way to split multi-line events when every event starts with a consistent prefix
+- Index-time field extraction requires props.conf, transforms.conf and fields.conf to work together, followed by a restart
+- Testing regex against sample logs before deploying saves time, especially when values like country span a line break
+- Once fields are clean, basic stats, top and dc commands quickly surface user behaviour and sensitive file access
+
+# What I Would Flag in a Real SOC
+- Access to secret-document.pdf by Sarah Hall, to be validated against her department and need-to-know
+- Unusually high activity from Robert Wilson compared to other users, worth baselining against normal behaviour
+- Access to sensitive resources from unexpected countries, which may indicate VPN misuse or compromised credentials
+- Any log source failing to parse correctly, since this creates a visibility gap that an attacker could benefit from
