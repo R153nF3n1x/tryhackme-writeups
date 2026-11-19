@@ -1,0 +1,184 @@
+# Room Name - TryHackMe: SigHunt
+
+Date: 19 November 2026
+Difficulty: Medium
+Category: Detection engineering
+
+# Scenario
+
+I was a detection engineer in my first week at an organisation that had just recovered from a ransomware incident. The incident response team gave me a report on the attack chain and its indicators of compromise. My task was to write Sigma rules for each stage of the attack, so the same activity would be caught early next time. I tested every rule against real attack logs in the TryHackMe Sigma Validator.
+
+The attack chain the incident response team reported:
+
+- A malicious HTA payload opened from a phishing link
+- Certutil used to download a Netcat binary
+- Netcat used to open a reverse shell
+- PowerUp.ps1 used to look for privilege escalation paths
+- Service modification rights abused to get SYSTEM privileges
+- Persistence set up through the RunOnce registry key
+- Sensitive data archived with 7-zip
+- The archive sent out with cURL
+- Ransomware run, leaving files with the .huntme extension
+
+# Tools Used
+
+- TryHackMe Sigma Validator
+- Sigma rule syntax (YAML)
+- Sysmon event logs (Event ID 1 for process creation, Event ID 11 for file creation)
+
+# What I Did
+
+For each challenge, I looked at the attack log preview, checked which fields the validator allowed, and wrote detection logic that matched on the parent-child process relationship, the image path, the command line arguments or the file artefacts. I used `endswith` on image paths so the rules would still match if the binary sat in a different folder, and `contains|all` so a rule only fires when several malicious arguments show up together.
+
+Challenge 1: HTA payload launched from the browser
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'mshta.exe'
+    ParentImage|endswith: 'chrome.exe'
+  condition: selection
+```
+
+Challenge 2: Certutil used as a download tool
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'certutil.exe'
+    CommandLine|contains: 'nc.exe'
+  condition: selection
+```
+
+Challenge 3: Netcat reverse shell
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'nc.exe'
+    CommandLine|contains|all:
+      - '-e'
+      - 'cmd.exe'
+    Hashes|contains: 'IMPHASH=567531F08180AB3963B70889578118A3'
+  condition: selection
+```
+
+Challenge 4: PowerUp enumeration loaded into memory
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'powershell.exe'
+    CommandLine|contains|all:
+      - 'net.webclient'
+      - 'PowerUp.ps1'
+  condition: selection
+```
+
+Challenge 5: Service binary path changed
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'sc.exe'
+    CommandLine|contains|all:
+      - 'rev.exe'
+      - 'cmd.exe'
+      - '-e'
+      - 'huntmeplz.com'
+  condition: selection
+```
+
+Challenge 6: RunOnce registry persistence
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'reg.exe'
+    CommandLine|contains|all:
+      - 'RunOnce'
+      - 'MicrosoftUpdate'
+      - '/v'
+      - 'cmdd.exe'
+  condition: selection
+```
+
+Challenge 7: 7-zip collection with a password-protected archive
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: '7z.exe'
+    CommandLine|contains|all:
+      - '7z'
+      - 'a'
+      - '-p'
+      - 'exfil.zip'
+  condition: selection
+```
+
+Challenge 8: cURL exfiltration over a non-standard port
+
+```yaml
+detection:
+  selection:
+    EventID: 1
+    Image|endswith: 'curl.exe'
+    CommandLine|contains|all:
+      - 'curl'
+      - '8080'
+      - '-d'
+      - 'exfil.zip'
+  condition: selection
+```
+
+Challenge 9: Ransomware file encryption
+
+```yaml
+detection:
+  selection:
+    EventID: 11
+    TargetFilename|endswith: 'xlsx.huntme'
+  condition: selection
+```
+
+# What I Found
+
+- mshta.exe started by chrome.exe is a strong phishing signal, because browsers should not normally launch HTA files
+- In the real attack log, Certutil downloaded nc.exe, not the ransom.exe shown in the report, so I built the rule from the log instead of the report
+- For the Netcat rule I used the IMPHASH instead of the MD5 hash from the report, because an import hash stays the same across small recompiles and renamed copies
+- PowerUp was loaded straight into memory with iex and net.webclient, so nothing was written to disk and only command line logging could catch it
+- The attacker changed the binPath of the SNMPTRAP service to point at a reverse shell binary, which gave them SYSTEM-level execution
+- Persistence was hidden behind a RunOnce value named MicrosoftUpdate that ran a fake binary, cmdd.exe, made to look like cmd.exe
+- The data was put into a password-protected 7-zip archive before it left the network, which stops content inspection
+- cURL sent exfil.zip as a POST body to the attacker domain on port 8080
+- The ransomware left files with the .huntme extension, which Sysmon Event ID 11 can pick up as they are created
+
+# Key Learning
+
+- Detection rules should be built from the real log data. Incident report indicators can differ from what the endpoint actually recorded
+- Parent-child process relationships are among the most reliable signals for initial access through living-off-the-land binaries
+- Using `contains|all` across several arguments cuts false positives a lot compared with matching a single keyword
+- IMPHASH lasts longer than file hashes like MD5 or SHA256, which change easily
+- `endswith` on the image field makes a rule harder to evade by moving the binary or calling it with a different path
+- Sysmon Event ID 1 covers most execution stages, while Event ID 11 is needed for file-based effects such as encryption
+
+# What I Would Flag in a Real SOC
+
+- Any mshta.exe process whose parent is a browser or an email client
+- Certutil running with -urlcache, -split or -f, which almost always means it is being misused as a downloader
+- Netcat or similar tools running with -e, or any process talking outbound to unusual ports such as 4443 or 4444
+- PowerShell command lines with iex, downloadstring or net.webclient that pull scripts from external domains
+- sc.exe config commands that point binPath at user-writable folders such as AppData\Local\Temp
+- New Run or RunOnce registry values that point at unsigned binaries or names that imitate system files
+- Archiving tools creating password-protected archives, especially just before outbound network activity
+- curl.exe sending POST requests with file uploads to external hosts
+- Many files being created with an unknown extension in a short time, which points to active ransomware encryption
+- Connecting these alerts by host and user so the whole attack chain can be stopped early, before exfiltration and encryption
